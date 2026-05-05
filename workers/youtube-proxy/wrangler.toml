@@ -1,0 +1,16 @@
+name = "partnerhub-youtube-proxy"
+main = "src/index.ts"
+compatibility_date = "2023-10-16"
+
+# A API_KEY do YouTube será injetada via secret: `wrangler secret put YOUTUBE_API_KEY`
+# O CHANNEL_ID pode ser definido como texto plano aqui:
+[vars]
+YOUTUBE_CHANNEL_ID = "UCwye4xECPH-lcDH_xOSVzAg"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "partnerhub_db"
+database_id = "local-db-id"
+
+[triggers]
+crons = ["0 0 * * *"] # Run every day at midnight

@@ -1,0 +1,8 @@
+# Copy this file to .dev.vars and fill in your own values
+# NEVER commit .dev.vars to git
+
+YOUTUBE_API_KEY="your_youtube_api_key_here"
+YOUTUBE_CHANNEL_ID="your_channel_id_here"
+META_ACCESS_TOKEN="your_meta_access_token_here"
+META_IG_ACCOUNT_ID="your_instagram_account_id_here"
+META_AD_ACCOUNT_ID="act_your_ad_account_id_here"
