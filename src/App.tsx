@@ -16,8 +16,10 @@ function App() {
     <SWRConfig 
       value={{
         fetcher: (url: string) => fetch(url).then(res => res.json()),
-        revalidateOnFocus: true,
-        dedupingInterval: 5000,
+        revalidateOnFocus: false,      // não revalida ao focar a janela
+        revalidateIfStale: false,      // não revalida se já tem dados em cache
+        revalidateOnReconnect: false,  // não revalida ao reconectar
+        dedupingInterval: 5 * 60 * 1000, // cache de 5 minutos
       }}
     >
       <BrowserRouter>
