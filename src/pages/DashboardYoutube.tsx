@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import { useState } from 'react';
+import useSWR from 'swr';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/Card';
 import { Badge } from '../components/Badge';
 import { KpiCard } from '../components/KpiCard';
@@ -18,28 +19,16 @@ function initRange(): DateRange {
 }
 
 export function DashboardYoutube() {
-  const [stats, setStats] = useState<any>(null);
-  const [topVideos, setTopVideos] = useState<any[]>([]);
-  const [monthlyStats, setMonthlyStats] = useState<any[]>([]);
-  const [uploadFreq, setUploadFreq] = useState<any[]>([]);
   const [range, setRange] = useState<DateRange>(initRange());
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const [sR, tR, mR, fR] = await Promise.allSettled([
-          fetch(`${API}/channel-stats`).then(r => r.json()),
-          fetch(`${API}/youtube-top-videos`).then(r => r.json()),
-          fetch(`${API}/youtube-monthly-stats`).then(r => r.json()),
-          fetch(`${API}/youtube-upload-frequency`).then(r => r.json()),
-        ]);
-        if (sR.status === 'fulfilled') setStats(sR.value);
-        if (tR.status === 'fulfilled') setTopVideos(tR.value || []);
-        if (mR.status === 'fulfilled') setMonthlyStats(mR.value || []);
-        if (fR.status === 'fulfilled') setUploadFreq(((fR.value as any[]) || []).reverse());
-      } catch (e) { console.error(e); }
-    })();
-  }, []);
+  const { data: stats } = useSWR(`${API}/channel-stats`);
+  const { data: topVideosData } = useSWR(`${API}/youtube-top-videos`);
+  const { data: monthlyStatsData } = useSWR(`${API}/youtube-monthly-stats`);
+  const { data: uploadFreqData } = useSWR(`${API}/youtube-upload-frequency`);
+
+  const topVideos = topVideosData || [];
+  const monthlyStats = monthlyStatsData || [];
+  const uploadFreq = uploadFreqData ? [...(uploadFreqData as any[])].reverse() : [];
 
   // Apply date filter to monthly/upload data
   const filteredMonthly  = filterByRange(monthlyStats, range);
@@ -152,7 +141,7 @@ export function DashboardYoutube() {
             </p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-              {topVideos.map((v, i) => {
+              {topVideos.map((v: any, i: number) => {
                 const pct = topViewCount > 0 ? Math.round((v.views / topViewCount) * 100) : 0;
                 return (
                   <div key={v.youtube_id} style={{ display: 'flex', alignItems: 'center', gap: '0.875rem', padding: '0.75rem', borderRadius: '0.625rem', background: 'rgba(255,255,255,0.03)', transition: 'background 0.15s' }}

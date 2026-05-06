@@ -1,4 +1,4 @@
-import React from 'react';
+// App
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AppLayout } from './layouts/AppLayout';
 import { Strategy } from './pages/Strategy';
@@ -9,11 +9,18 @@ import { DashboardMix } from './pages/DashboardMix';
 import { DashboardInstagram } from './pages/DashboardInstagram';
 import { DashboardYoutube } from './pages/DashboardYoutube';
 
-
+import { SWRConfig } from 'swr';
 
 function App() {
   return (
-    <BrowserRouter>
+    <SWRConfig 
+      value={{
+        fetcher: (url: string) => fetch(url).then(res => res.json()),
+        revalidateOnFocus: true,
+        dedupingInterval: 5000,
+      }}
+    >
+      <BrowserRouter>
       <Routes>
         <Route path="/" element={<AppLayout />}>
           <Route index element={<DashboardMix />} />
@@ -28,6 +35,7 @@ function App() {
         </Route>
       </Routes>
     </BrowserRouter>
+    </SWRConfig>
   );
 }
 

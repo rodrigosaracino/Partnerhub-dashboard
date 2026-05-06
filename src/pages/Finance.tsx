@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import useSWR, { mutate } from 'swr';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/Card';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -26,10 +27,13 @@ const formatCurrency = (value: number) => {
 };
 
 export function Finance() {
-  const [goals, setGoals] = useState<FinancialGoal[]>([]);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loading, setLoading] = useState(true);
-  
+  const { data: goalsData, isLoading: loadingGoals } = useSWR(`${API_URL}/financial-goals`);
+  const { data: transactionsData, isLoading: loadingTx } = useSWR(`${API_URL}/transactions`);
+
+  const goals: FinancialGoal[] = goalsData || [];
+  const transactions: Transaction[] = transactionsData || [];
+  const loading = loadingGoals || loadingTx;
+
   // States for Goal Form
   const [isGoalFormOpen, setIsGoalFormOpen] = useState(false);
   const [goalMonth, setGoalMonth] = useState('');
@@ -44,28 +48,6 @@ export function Finance() {
   const [txDescription, setTxDescription] = useState('');
   const [txCategory, setTxCategory] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-      const [goalsRes, txRes] = await Promise.all([
-        fetch(`${API_URL}/financial-goals`),
-        fetch(`${API_URL}/transactions`)
-      ]);
-      if (goalsRes.ok && txRes.ok) {
-        setGoals(await goalsRes.json());
-        setTransactions(await txRes.json());
-      }
-    } catch (e) {
-      console.error('Erro ao buscar dados financeiros', e);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const openGoalForm = () => {
     const today = new Date();
@@ -105,7 +87,7 @@ export function Finance() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: goalMonth, target_revenue: parseFloat(goalValue) || 0 })
       });
-      await fetchData();
+      await mutate(`${API_URL}/financial-goals`);
       setIsGoalFormOpen(false);
     } catch (e) {
       console.error('Erro ao salvar meta', e);
@@ -128,7 +110,7 @@ export function Finance() {
           category: txCategory || 'Geral'
         })
       });
-      await fetchData();
+      await mutate(`${API_URL}/transactions`);
       setIsTxFormOpen(false);
     } catch (e) {
       console.error('Erro ao salvar transação', e);
@@ -140,7 +122,7 @@ export function Finance() {
       const res = await fetch(`${API_URL}/transactions/${id}`, { method: 'DELETE' });
       if (res.ok) {
         setConfirmDeleteId(null);
-        await fetchData();
+        await mutate(`${API_URL}/transactions`);
       }
     } catch (e) {
       console.error('Erro ao apagar transação', e);
@@ -287,7 +269,7 @@ export function Finance() {
                 />
                 <Tooltip 
                   contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: '8px' }}
-                  formatter={(value: number) => formatCurrency(value)}
+                  formatter={(value: any) => formatCurrency(value)}
                   labelStyle={{ color: 'var(--text-secondary)', marginBottom: '8px' }}
                 />
                 <Legend />

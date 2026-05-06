@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import { useState } from 'react';
+import useSWR from 'swr';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/Card';
 import { Badge } from '../components/Badge';
 import { KpiCard } from '../components/KpiCard';
@@ -8,7 +9,7 @@ import {
   Users, DollarSign, Video, Globe, TrendingUp, Zap, Camera,
 } from 'lucide-react';
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Legend, ComposedChart,
 } from 'recharts';
 
@@ -20,62 +21,45 @@ function initRange(): DateRange {
 }
 
 export function DashboardMix() {
-  const [impact, setImpact] = useState<any>(null);
-  const [igHistory, setIgHistory] = useState<any[]>([]);
-  const [ytHistory, setYtHistory] = useState<any[]>([]);
-  const [metaHistory, setMetaHistory] = useState<any[]>([]);
-  const [igStats, setIgStats] = useState<any>(null);
-  const [ytStats, setYtStats] = useState<any>(null);
-  const [metaStats, setMetaStats] = useState<any>(null);
-  const [financialStats, setFinancialStats] = useState({ income: 0, goal: 0, progress: 0 });
   const [range, setRange] = useState<DateRange>(initRange());
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const [impactRes, igMonthRes, ytMonthRes, metaHistRes, igRes, ytRes, metaRes, goalsRes, txRes] =
-          await Promise.allSettled([
-            fetch(`${API}/total-impact`).then(r => r.json()),
-            fetch(`${API}/instagram-monthly`).then(r => r.json()),
-            fetch(`${API}/youtube-monthly-stats`).then(r => r.json()),
-            fetch(`${API}/meta-history`).then(r => r.json()),
-            fetch(`${API}/instagram-stats`).then(r => r.json()),
-            fetch(`${API}/channel-stats`).then(r => r.json()),
-            fetch(`${API}/meta-ads-stats`).then(r => r.json()),
-            fetch(`${API}/financial-goals`).then(r => r.json()),
-            fetch(`${API}/transactions`).then(r => r.json()),
-          ]);
+  const { data: impact } = useSWR(`${API}/total-impact`);
+  const { data: igMonthRes } = useSWR(`${API}/instagram-monthly`);
+  const { data: ytMonthRes } = useSWR(`${API}/youtube-monthly-stats`);
+  const { data: metaHistRes } = useSWR(`${API}/meta-history`);
+  const { data: igStats } = useSWR(`${API}/instagram-stats`);
+  const { data: ytStats } = useSWR(`${API}/channel-stats`);
+  const { data: metaStats } = useSWR(`${API}/meta-ads-stats`);
+  const { data: goalsRes } = useSWR(`${API}/financial-goals`);
+  const { data: txRes } = useSWR(`${API}/transactions`);
 
-        if (impactRes.status === 'fulfilled') setImpact(impactRes.value);
-        if (igMonthRes.status === 'fulfilled') setIgHistory(igMonthRes.value);
-        if (ytMonthRes.status === 'fulfilled') setYtHistory(ytMonthRes.value);
-        if (metaHistRes.status === 'fulfilled') setMetaHistory((metaHistRes.value as any[]).slice(-12));
-        if (igRes.status === 'fulfilled') setIgStats(igRes.value);
-        if (ytRes.status === 'fulfilled') setYtStats(ytRes.value);
-        if (metaRes.status === 'fulfilled') setMetaStats(metaRes.value);
+  const igHistory = igMonthRes || [];
+  const ytHistory = ytMonthRes || [];
+  const metaHistory = metaHistRes ? (metaHistRes as any[]).slice(-12) : [];
 
-        if (goalsRes.status === 'fulfilled' && txRes.status === 'fulfilled') {
-          const goals = goalsRes.value as any[];
-          const txs   = txRes.value as any[];
-          const today = new Date();
-          const monthStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
-          const goal   = goals.find((g: any) => g.id === monthStr)?.target_revenue || 0;
-          const income = txs.filter((t: any) => t.date?.startsWith(monthStr) && t.type === 'income')
-                            .reduce((s: number, t: any) => s + t.amount, 0);
-          setFinancialStats({ income, goal, progress: goal > 0 ? Math.min(Math.round((income / goal) * 100), 100) : 0 });
-        }
-      } catch (e) { console.error(e); }
-    })();
-  }, []);
+  const financialStats = (() => {
+    let income = 0;
+    let goal = 0;
+    let progress = 0;
+    if (goalsRes && txRes) {
+      const today = new Date();
+      const monthStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+      goal = goalsRes.find((g: any) => g.id === monthStr)?.target_revenue || 0;
+      income = txRes.filter((t: any) => t.date?.startsWith(monthStr) && t.type === 'income')
+                        .reduce((s: number, t: any) => s + t.amount, 0);
+      progress = goal > 0 ? Math.min(Math.round((income / goal) * 100), 100) : 0;
+    }
+    return { income, goal, progress };
+  })();
 
   // Build filtered combined chart
   const combinedChart = (() => {
     const months: Record<string, any> = {};
-    filterByRange(igHistory, range).forEach(r => { months[r.name] = { ...months[r.name], name: r.name, ig: r.alcance }; });
+    (filterByRange(igHistory, range) as any[]).forEach(r => { months[r.name] = { ...months[r.name], name: r.name, ig: r.alcance }; });
 
     const sortedYt = [...ytHistory].sort((a: any, b: any) => a.name.localeCompare(b.name));
     const ytFiltered = filterByRange(sortedYt, range);
-    ytFiltered.forEach((r, idx) => {
+    ytFiltered.forEach((r) => {
       const globalIdx = sortedYt.findIndex(x => x.name === r.name);
       const prevViews = globalIdx > 0 ? sortedYt[globalIdx - 1].views : 5200;
       const monthlyViews = Math.max(0, r.views - prevViews);

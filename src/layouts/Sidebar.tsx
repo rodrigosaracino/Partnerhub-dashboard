@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard, Video, Settings, Target, DollarSign,
+  Video, Settings, Target, DollarSign,
   MessageSquare, Camera, BarChart2, PlaySquare
 } from 'lucide-react';
 import { cn } from '../components/Button';

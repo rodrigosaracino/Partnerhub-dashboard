@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
+import useSWR from 'swr';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/Card';
 import { Badge } from '../components/Badge';
 import { Users, DollarSign, MousePointerClick, Video, Camera, Eye, Heart, UserPlus, Globe, TrendingUp, Zap, BarChart3, Target } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
+import { API } from '../utils/format';
 
 const mockYoutubeData = [
   { name: 'Sem 1', views: 4000, subs: 120 },
@@ -21,122 +23,36 @@ const mockFunnelData = [
 ];
 
 export function Dashboard() {
-  const [youtubeStats, setYoutubeStats] = useState<{ subscriberCount?: string, viewCount?: string, videoCount?: string } | null>(null);
-  const [youtubeLoading, setYoutubeLoading] = useState(true);
+  const { data: youtubeStats } = useSWR(`${API}/channel-stats`);
+  const { data: totalImpact } = useSWR(`${API}/total-impact`);
+  const { data: youtubeGrowthData } = useSWR(`${API}/channel-history`);
+  const { data: metaGrowthData } = useSWR(`${API}/meta-history`);
+  const { data: instagramGrowthData } = useSWR(`${API}/instagram-history`);
+  const { data: igStats } = useSWR(`${API}/instagram-stats`);
+  const { data: metaStatsData } = useSWR(`${API}/meta-ads-stats`);
+  const { data: goalsRes } = useSWR(`${API}/financial-goals`);
+  const { data: txRes } = useSWR(`${API}/transactions`);
 
-  const [youtubeGrowth, setYoutubeGrowth] = useState<any[]>([]);
-  const [metaGrowth, setMetaGrowth] = useState<any[]>([]);
-  const [instagramGrowth, setInstagramGrowth] = useState<any[]>([]);
-  const [totalImpact, setTotalImpact] = useState<any>(null);
-  
-  const [financialStats, setFinancialStats] = useState({ income: 0, goal: 0, progress: 0 });
-  const [metaStats, setMetaStats] = useState({ spend: 0, leads: 0, cpl: 0, error: false });
-  const [igStats, setIgStats] = useState<{ username: string, followers: number, media_count: number, reach: number, profile_views: number, accounts_engaged: number, total_interactions: number, new_followers: number, reach_chart: any[], engagement_rate: number, conversion_rate: number, retention_rate: number, error?: boolean } | null>(null);
+  const youtubeLoading = !youtubeStats;
+  const youtubeGrowth = youtubeGrowthData || [];
+  const metaGrowth = metaGrowthData ? (metaGrowthData as any[]).slice(-15) : [];
+  const instagramGrowth = instagramGrowthData ? (instagramGrowthData as any[]).slice(-15) : [];
+  const metaStats = metaStatsData?.error || !metaStatsData ? { spend: 0, leads: 0, cpl: 0, error: true } : { ...metaStatsData, error: false };
 
-  useEffect(() => {
-    async function fetchYouTubeStats() {
-      try {
-        const resStats = await fetch('http://127.0.0.1:8787/channel-stats');
-        if (resStats.ok) {
-          const data = await resStats.json();
-          setYoutubeStats(data);
-        }
-
-        const resGrowth = await fetch('http://127.0.0.1:8787/channel-history');
-        if (resGrowth.ok) {
-          const growthData = await resGrowth.json();
-          setYoutubeGrowth(growthData);
-        }
-      } catch (error) {
-        console.error('Erro ao buscar dados do YouTube:', error);
-      } finally {
-        setYoutubeLoading(false);
-      }
+  const financialStats = (() => {
+    let income = 0;
+    let goal = 0;
+    let progress = 0;
+    if (goalsRes && txRes) {
+      const today = new Date();
+      const currentMonthStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+      goal = goalsRes.find((g: any) => g.id === currentMonthStr)?.target_revenue || 0;
+      income = txRes.filter((tx: any) => tx.date?.startsWith(currentMonthStr) && tx.type === 'income')
+                        .reduce((acc: number, tx: any) => acc + tx.amount, 0);
+      progress = goal > 0 ? Math.min(Math.round((income / goal) * 100), 100) : 0;
     }
-    async function fetchTotalImpact() {
-      try {
-        const res = await fetch('http://127.0.0.1:8787/total-impact');
-        if (res.ok) {
-          const data = await res.json();
-          setTotalImpact(data);
-        }
-      } catch (e) {}
-    }
-    async function fetchFinancialStats() {
-      try {
-        const [goalsRes, txRes] = await Promise.all([
-          fetch('http://127.0.0.1:8787/financial-goals'),
-          fetch('http://127.0.0.1:8787/transactions')
-        ]);
-        
-        if (goalsRes.ok && txRes.ok) {
-          const goals = await goalsRes.json();
-          const txs = await txRes.json();
-          
-          const today = new Date();
-          const currentMonthStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
-          
-          const currentGoal = goals.find((g: any) => g.id === currentMonthStr)?.target_revenue || 0;
-          
-          const currentIncome = txs
-            .filter((tx: any) => tx.date.startsWith(currentMonthStr) && tx.type === 'income')
-            .reduce((acc: number, tx: any) => acc + tx.amount, 0);
-            
-          const progress = currentGoal > 0 ? Math.min(Math.round((currentIncome / currentGoal) * 100), 100) : 0;
-          
-          setFinancialStats({ income: currentIncome, goal: currentGoal, progress });
-        }
-      } catch (error) {
-        console.error('Erro ao buscar dados financeiros:', error);
-      }
-    }
-
-    async function fetchMetaStats() {
-      try {
-        const res = await fetch('http://127.0.0.1:8787/meta-ads-stats');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.error) {
-            setMetaStats({ spend: 0, leads: 0, cpl: 0, error: true });
-          } else {
-            setMetaStats({ spend: data.spend, leads: data.leads, cpl: data.cpl, error: false });
-          }
-        } else {
-          setMetaStats({ spend: 0, leads: 0, cpl: 0, error: true });
-        }
-
-        const resHistory = await fetch('http://127.0.0.1:8787/meta-history');
-        if (resHistory.ok) {
-          const historyData = await resHistory.json();
-          setMetaGrowth(historyData.slice(-15));
-        }
-      } catch (error) {
-        console.error('Erro ao buscar dados da Meta:', error);
-        setMetaStats({ spend: 0, leads: 0, cpl: 0, error: true });
-      }
-    }
-    async function fetchIgStats() {
-      try {
-        const res = await fetch('http://127.0.0.1:8787/instagram-stats');
-        if (res.ok) {
-          const data = await res.json();
-          setIgStats(data);
-        }
-
-        const resHistory = await fetch('http://127.0.0.1:8787/instagram-history');
-        if (resHistory.ok) {
-          const historyData = await resHistory.json();
-          setInstagramGrowth(historyData.slice(-15));
-        }
-      } catch (e) {}
-    }
-    
-    fetchYouTubeStats();
-    fetchFinancialStats();
-    fetchMetaStats();
-    fetchIgStats();
-    fetchTotalImpact();
-  }, []);
+    return { income, goal, progress };
+  })();
 
   const formatNumber = (num?: number | string) => {
     if (!num) return '0';

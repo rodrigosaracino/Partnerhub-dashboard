@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Calendar, ChevronDown } from 'lucide-react';
 
 export type DateRange = { from: string; to: string }; // 'YYYY-MM'

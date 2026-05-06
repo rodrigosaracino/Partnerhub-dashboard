@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import { useState } from 'react';
+import useSWR from 'swr';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/Card';
 import { Badge } from '../components/Badge';
 import { KpiCard } from '../components/KpiCard';
@@ -18,30 +19,19 @@ function initRange(): DateRange {
 }
 
 export function DashboardInstagram() {
-  const [stats, setStats] = useState<any>(null);
-  const [history, setHistory] = useState<any[]>([]);
-  const [monthly, setMonthly] = useState<any[]>([]);
   const [range, setRange] = useState<DateRange>(initRange());
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const [sR, hR, mR] = await Promise.allSettled([
-          fetch(`${API}/instagram-stats`).then(r => r.json()),
-          fetch(`${API}/instagram-history`).then(r => r.json()),
-          fetch(`${API}/instagram-monthly`).then(r => r.json()),
-        ]);
-        if (sR.status === 'fulfilled') setStats(sR.value);
-        if (hR.status === 'fulfilled') setHistory(hR.value);
-        if (mR.status === 'fulfilled') setMonthly(mR.value);
-      } catch (e) { console.error(e); }
-    })();
-  }, []);
+  const { data: stats } = useSWR(`${API}/instagram-stats`);
+  const { data: historyData } = useSWR(`${API}/instagram-history`);
+  const { data: monthlyData } = useSWR(`${API}/instagram-monthly`);
+
+  const history = historyData || [];
+  const monthly = monthlyData || [];
 
   // Apply date filter to history (daily data, name = 'DD/MM')
   // The daily history has `name` like '01/01', so we use the raw array filtered by matching months
-  const filteredHistory = filterByRangeDate(history, range);
-  const filteredMonthly = filterByRange(monthly, range);
+  const filteredHistory: any[] = filterByRangeDate(history, range);
+  const filteredMonthly: any[] = filterByRange(monthly, range);
 
   const avgReach = filteredHistory.length > 0
     ? Math.round(filteredHistory.reduce((s, r) => s + (r.alcance || 0), 0) / filteredHistory.length)

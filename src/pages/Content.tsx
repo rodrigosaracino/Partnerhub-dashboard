@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import useSWR, { mutate } from 'swr';
 import { Card, CardContent } from '../components/Card';
 import { Button } from '../components/Button';
-import { Badge } from '../components/Badge';
 import { Input } from '../components/Input';
 import {
   VideoDetailsModal,
@@ -16,11 +16,12 @@ type Video = VideoForModal;
 const API_URL = API;
 
 export function Content() {
-  const [videos, setVideos] = useState<Video[]>([]);
+  const { data: videosData, isLoading: loading } = useSWR(`${API_URL}/videos`);
+  const videos: Video[] = videosData || [];
+  
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedVideoForDetails, setSelectedVideoForDetails] = useState<Video | null>(null);
-  const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   
   // Form states
@@ -36,25 +37,6 @@ export function Content() {
   const [newPersona, setNewPersona] = useState('');
   const [newPainPoint, setNewPainPoint] = useState('');
   const [newProblemSolved, setNewProblemSolved] = useState('');
-
-  useEffect(() => {
-    fetchVideos();
-  }, []);
-
-  const fetchVideos = async () => {
-    try {
-      setLoading(true);
-      const res = await fetch(`${API_URL}/videos`);
-      if (res.ok) {
-        const data = await res.json();
-        setVideos(data);
-      }
-    } catch (e) {
-      console.error('Erro ao buscar vídeos', e);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const openForm = (video?: Video) => {
     if (video) {
@@ -114,7 +96,7 @@ export function Content() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newVideo)
       });
-      await fetchVideos();
+      await mutate(`${API_URL}/videos`);
       closeForm();
     } catch (e) {
       console.error('Erro ao salvar vídeo', e);
@@ -128,7 +110,7 @@ export function Content() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...video, status: updatedStatus })
       });
-      await fetchVideos();
+      await mutate(`${API_URL}/videos`);
     } catch (e) {
       console.error('Erro ao atualizar status', e);
     }
@@ -138,7 +120,7 @@ export function Content() {
     if (confirm('Tem certeza que deseja remover este vídeo?')) {
       try {
         await fetch(`${API_URL}/videos/${id}`, { method: 'DELETE' });
-        await fetchVideos();
+        await mutate(`${API_URL}/videos`);
       } catch (e) {
         console.error('Erro ao excluir vídeo', e);
       }
@@ -152,7 +134,7 @@ export function Content() {
       if (res.ok) {
         const result = await res.json();
         alert(`Sincronização concluída! ${result.totalSynced} vídeos processados.`);
-        await fetchVideos();
+        await mutate(`${API_URL}/videos`);
       }
     } catch (e) {
       console.error('Erro ao sincronizar YouTube', e);
@@ -349,7 +331,7 @@ export function Content() {
                             {pillarConfig[video.pillar].label}
                           </span>
                           {video.journey_stage && (
-                            <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${journeyConfig[video.journey_stage].bg} text-white`}>
+                            <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${(journeyConfig[video.journey_stage] as any).bg || 'bg-gray-500'} text-white`}>
                               {journeyConfig[video.journey_stage].label}
                             </span>
                           )}

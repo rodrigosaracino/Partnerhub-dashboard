@@ -114,8 +114,6 @@ const s = {
 export function VideoDetailsModal({ video, onClose }: Props) {
   if (!video) return null;
 
-  const subscribers = video.views > 0;
-
   return createPortal(
     <div style={s.overlay} onClick={onClose}>
       <div style={s.panel} onClick={e => e.stopPropagation()}>

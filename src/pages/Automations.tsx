@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import useSWR, { mutate } from 'swr';
 import { Card, CardContent } from '../components/Card';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -15,31 +16,13 @@ interface Rule {
 const API_URL = 'http://127.0.0.1:8787';
 
 export function Automations() {
-  const [rules, setRules] = useState<Rule[]>([]);
+  const { data: rulesData, isLoading: loading } = useSWR(`${API_URL}/automation-rules`);
+  const rules: Rule[] = rulesData || [];
+
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
   
   const [keyword, setKeyword] = useState('');
   const [message, setMessage] = useState('');
-
-  useEffect(() => {
-    fetchRules();
-  }, []);
-
-  const fetchRules = async () => {
-    try {
-      setLoading(true);
-      const res = await fetch(`${API_URL}/automation-rules`);
-      if (res.ok) {
-        const data = await res.json();
-        setRules(data);
-      }
-    } catch (e) {
-      console.error('Erro ao buscar regras', e);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,7 +37,7 @@ export function Automations() {
       setKeyword('');
       setMessage('');
       setIsFormOpen(false);
-      await fetchRules();
+      await mutate(`${API_URL}/automation-rules`);
     } catch (e) {
       console.error('Erro ao salvar regra', e);
     }
@@ -67,7 +50,7 @@ export function Automations() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...rule, active: rule.active ? 0 : 1 })
       });
-      await fetchRules();
+      await mutate(`${API_URL}/automation-rules`);
     } catch (e) {
       console.error('Erro ao alternar regra', e);
     }
@@ -77,7 +60,7 @@ export function Automations() {
     if (confirm('Deseja excluir esta automação?')) {
       try {
         await fetch(`${API_URL}/automation-rules/${id}`, { method: 'DELETE' });
-        await fetchRules();
+        await mutate(`${API_URL}/automation-rules`);
       } catch (e) {
         console.error('Erro ao excluir', e);
       }
