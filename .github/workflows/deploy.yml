@@ -1,0 +1,54 @@
+name: Deploy → VPS
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Build frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -e
+            cd /var/www/partnerhub
+
+            echo "→ Atualizando código..."
+            git pull origin main
+
+            echo "→ Instalando dependências da API..."
+            cd /var/www/partnerhub/server
+            npm ci --omit=dev
+
+            echo "→ Build do frontend..."
+            cd /var/www/partnerhub
+            npm ci
+            npm run build
+
+            echo "→ Reiniciando API..."
+            pm2 restart partnerhub-api || pm2 start /var/www/partnerhub/server/ecosystem.config.cjs --env production
+            pm2 save
+
+            echo "✅ Deploy concluído!"

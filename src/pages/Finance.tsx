@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import useSWR, { mutate } from 'swr';
+import { API as API_URL } from '../utils/format';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/Card';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
@@ -20,7 +21,7 @@ interface Transaction {
   category: string;
 }
 
-const API_URL = 'http://127.0.0.1:8787';
+// API_URL importado de utils/format.ts
 
 const formatCurrency = (value: number) => {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);

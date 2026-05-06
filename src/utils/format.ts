@@ -2,7 +2,7 @@
 // Centralized utilities for all dashboard pages
 // ─────────────────────────────────────────────
 
-export const API = 'http://127.0.0.1:8787';
+export const API = '/api';
 
 /** Format a number with pt-BR locale. Returns '0' for nullish / NaN values. */
 export function fmt(n?: number | string | null): string {
