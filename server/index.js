@@ -373,6 +373,138 @@ router.get('/health', (req, res) => {
   return ok(res, { status: 'ok', db: DB_PATH });
 });
 
+// ── 9. Competitor Channel Analysis ───────────────────────────
+// Cache em memória: { [channelId]: { data, expiresAt } }
+const competitorCache = new Map();
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hora
+
+function parseChannelInput(input) {
+  if (!input) return null;
+  const s = input.trim();
+  // UC... channel ID direto
+  if (/^UC[\w-]{22}$/.test(s)) return { type: 'id', value: s };
+  // URL com /channel/UC...
+  const chanMatch = s.match(/youtube\.com\/channel\/(UC[\w-]{22})/);
+  if (chanMatch) return { type: 'id', value: chanMatch[1] };
+  // URL com /@handle ou /c/handle ou /user/handle
+  const handleMatch = s.match(/youtube\.com\/(?:@|c\/|user\/)?([\w.-]+)/);
+  if (handleMatch) return { type: 'handle', value: handleMatch[1] };
+  // @handle sem URL
+  if (s.startsWith('@')) return { type: 'handle', value: s.slice(1) };
+  // qualquer outra string tratada como handle
+  return { type: 'handle', value: s };
+}
+
+router.get('/competitor-channel', async (req, res) => {
+  try {
+    const apiKey = process.env.YOUTUBE_API_KEY;
+    if (!apiKey) return err(res, 'YouTube API key não configurada', 500);
+
+    const input = req.query.id || req.query.handle || req.query.url || '';
+    const maxResults = Math.min(parseInt(req.query.maxResults || '20', 10), 50);
+
+    const parsed = parseChannelInput(input);
+    if (!parsed) return err(res, 'Informe um canal válido (URL, @handle ou Channel ID)', 400);
+
+    // ── Resolver Channel ID ────────────────────────────────
+    let channelId = '';
+    if (parsed.type === 'id') {
+      channelId = parsed.value;
+    } else {
+      // forHandle retorna canal cujo handle corresponde
+      const hUrl = `https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=${parsed.value}&key=${apiKey}`;
+      const hRes = await fetch(hUrl);
+      const hData = await hRes.json();
+      if (hData.items?.length > 0) {
+        channelId = hData.items[0].id;
+      } else {
+        // Fallback: forUsername (canais antigos)
+        const uUrl = `https://www.googleapis.com/youtube/v3/channels?part=id&forUsername=${parsed.value}&key=${apiKey}`;
+        const uRes = await fetch(uUrl);
+        const uData = await uRes.json();
+        if (uData.items?.length > 0) {
+          channelId = uData.items[0].id;
+        } else {
+          return err(res, `Canal "@${parsed.value}" não encontrado`, 404);
+        }
+      }
+    }
+
+    // ── Cache hit? ─────────────────────────────────────────
+    const cached = competitorCache.get(channelId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return ok(res, cached.data);
+    }
+
+    // ── Buscar Info do Canal ───────────────────────────────
+    const chanUrl = `https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics,brandingSettings&id=${channelId}&key=${apiKey}`;
+    const chanRes = await fetch(chanUrl);
+    const chanData = await chanRes.json();
+    if (!chanData.items?.length) return err(res, 'Canal não encontrado', 404);
+
+    const ch = chanData.items[0];
+    const channelInfo = {
+      id: ch.id,
+      title: ch.snippet.title,
+      description: ch.snippet.description,
+      customUrl: ch.snippet.customUrl || '',
+      publishedAt: ch.snippet.publishedAt,
+      thumbnail: ch.snippet.thumbnails?.high?.url || ch.snippet.thumbnails?.default?.url || '',
+      country: ch.snippet.country || '',
+      subscribers: parseInt(ch.statistics.subscriberCount || '0', 10),
+      totalViews: parseInt(ch.statistics.viewCount || '0', 10),
+      videoCount: parseInt(ch.statistics.videoCount || '0', 10),
+    };
+
+    // ── Buscar Top Vídeos (search por viewCount) ───────────
+    const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&order=viewCount&type=video&maxResults=${maxResults}&key=${apiKey}`;
+    const searchRes = await fetch(searchUrl);
+    const searchData = await searchRes.json();
+
+    let videos = [];
+    if (searchData.items?.length > 0) {
+      const videoIds = searchData.items.map(i => i.id.videoId).join(',');
+
+      // ── Buscar Estatísticas Detalhadas ─────────────────
+      const vidUrl = `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet,contentDetails&id=${videoIds}&key=${apiKey}`;
+      const vidRes = await fetch(vidUrl);
+      const vidData = await vidRes.json();
+
+      if (vidData.items) {
+        videos = vidData.items.map(v => {
+          const views   = parseInt(v.statistics.viewCount    || '0', 10);
+          const likes   = parseInt(v.statistics.likeCount   || '0', 10);
+          const comments = parseInt(v.statistics.commentCount || '0', 10);
+          const engRate = views > 0 ? ((likes + comments) / views) * 100 : 0;
+
+          return {
+            id: v.id,
+            title: v.snippet.title,
+            publishedAt: v.snippet.publishedAt,
+            thumbnail: v.snippet.thumbnails?.high?.url || v.snippet.thumbnails?.medium?.url || '',
+            views,
+            likes,
+            comments,
+            engagementRate: parseFloat(engRate.toFixed(2)),
+            duration: v.contentDetails?.duration || '',
+            url: `https://www.youtube.com/watch?v=${v.id}`,
+          };
+        });
+
+        // Ordenar por views descrescente
+        videos.sort((a, b) => b.views - a.views);
+      }
+    }
+
+    const result = { channel: channelInfo, videos, fetchedAt: new Date().toISOString() };
+
+    // ── Salvar no cache ────────────────────────────────────
+    competitorCache.set(channelId, { data: result, expiresAt: Date.now() + CACHE_TTL_MS });
+
+    return ok(res, result);
+  } catch (e) { return err(res, e.message); }
+});
+
 app.use('/api', router);
 
 // ── Funções de Sincronização ─────────────────────────────────
