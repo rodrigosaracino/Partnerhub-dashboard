@@ -2,11 +2,11 @@ import React from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   Video, Settings, Target, DollarSign,
-  MessageSquare, Camera, BarChart2, PlaySquare, Users, Trophy
+  MessageSquare, Camera, BarChart2, PlaySquare, Users, Trophy, LogOut
 } from 'lucide-react';
 import { cn } from '../components/Button';
 
-export function Sidebar() {
+export function Sidebar({ onLogout }: { onLogout: () => void }) {
   const navGroups = [
     {
       label: 'Dashboards',
@@ -62,7 +62,15 @@ export function Sidebar() {
         </nav>
 
         {/* Footer */}
-        <div style={{ paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: '0.5rem' }}>
+        <div style={{ paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <button
+            onClick={onLogout}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)', fontSize: '0.78rem', padding: '0.35rem 0.5rem', borderRadius: 6, width: '100%' }}
+            onMouseEnter={e => (e.currentTarget.style.color = '#f87171')}
+            onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-tertiary)')}
+          >
+            <LogOut size={14} /> Sair
+          </button>
           <p style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', textAlign: 'center', letterSpacing: '0.08em' }}>
             PartnerHub © 2026
           </p>

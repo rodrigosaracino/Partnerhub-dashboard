@@ -11,6 +11,8 @@ const Database = require('better-sqlite3');
 const cron    = require('node-cron');
 const path    = require('path');
 const fs      = require('fs');
+const jwt     = require('jsonwebtoken');
+const bcrypt  = require('bcrypt');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const PORT   = process.env.PORT || 3001;
@@ -710,7 +712,43 @@ Responda em um formato de Markdown limpo e fácil de ler, usando negrito para de
   } catch (e) { return err(res, e.message); }
 });
 
-app.use('/api', router);
+// ── Auth ─────────────────────────────────────────────────────
+const JWT_SECRET = process.env.JWT_SECRET || 'changeme-set-in-env';
+
+function requireAuth(req, res, next) {
+  const header = req.headers['authorization'] || '';
+  const token  = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ error: 'Não autenticado' });
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    return res.status(401).json({ error: 'Token inválido ou expirado' });
+  }
+}
+
+// POST /api/auth/login — público
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body || {};
+  const expectedUser = process.env.ADMIN_USERNAME || 'admin';
+  const passwordHash = process.env.ADMIN_PASSWORD_HASH || '';
+
+  if (!username || !password)
+    return res.status(400).json({ error: 'Usuário e senha obrigatórios' });
+
+  if (username !== expectedUser)
+    return res.status(401).json({ error: 'Credenciais inválidas' });
+
+  const valid = await bcrypt.compare(password, passwordHash);
+  if (!valid)
+    return res.status(401).json({ error: 'Credenciais inválidas' });
+
+  const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: '30d' });
+  return res.json({ token });
+});
+
+// Todas as rotas /api/* exigem autenticação
+app.use('/api', requireAuth, router);
 
 // ── Funções de Sincronização ─────────────────────────────────
 
