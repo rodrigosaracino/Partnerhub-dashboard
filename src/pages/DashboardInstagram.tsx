@@ -5,7 +5,7 @@ import { Badge } from '../components/Badge';
 import { KpiCard } from '../components/KpiCard';
 import { API, fmt, TOOLTIP_STYLE } from '../utils/format';
 import { DateRangeFilter, filterByRange, filterByRangeDate, type DateRange } from '../components/DateRangeFilter';
-import { Eye, Heart, UserPlus, Users, Camera, BarChart3, TrendingUp, MessageCircle, Star } from 'lucide-react';
+import { Eye, Heart, UserPlus, Users, Camera, BarChart3, TrendingUp, MessageCircle, Star, Play } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, ReferenceLine,
@@ -24,9 +24,11 @@ export function DashboardInstagram() {
   const { data: stats } = useSWR(`${API}/instagram-stats`);
   const { data: historyData } = useSWR(`${API}/instagram-history`);
   const { data: monthlyData } = useSWR(`${API}/instagram-monthly`);
+  const { data: postsData } = useSWR(`${API}/instagram-posts`);
 
   const history = historyData || [];
   const monthly = monthlyData || [];
+  const posts = postsData || [];
 
   // Apply date filter to history (daily data, name = 'DD/MM')
   // The daily history has `name` like '01/01', so we use the raw array filtered by matching months
@@ -173,6 +175,62 @@ export function DashboardInstagram() {
           </Card>
         </div>
       )}
+
+      {/* Recent Posts Section */}
+      <Card className="glass-panel">
+        <CardHeader>
+          <CardTitle style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Camera size={16} style={{ color: '#E1306C' }} /> Posts Recentes
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {posts.length === 0 ? (
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', textAlign: 'center', padding: '1.5rem 0' }}>
+              Nenhum post encontrado ou carregando...
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {posts.map((post: any) => (
+                <a key={post.id} href={post.permalink} target="_blank" rel="noreferrer" style={{ display: 'block', textDecoration: 'none', color: 'inherit' }}>
+                  <div style={{ borderRadius: '0.625rem', overflow: 'hidden', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)', transition: 'transform 0.2s, background 0.2s' }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)'; (e.currentTarget as HTMLElement).style.transform = 'translateY(-2px)'; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.03)'; (e.currentTarget as HTMLElement).style.transform = 'translateY(0)'; }}
+                  >
+                    <div style={{ position: 'relative', width: '100%', paddingTop: '100%' /* 1:1 aspect ratio */, backgroundColor: '#111' }}>
+                      <img 
+                        src={post.media_type === 'VIDEO' ? post.thumbnail_url || post.media_url : post.media_url} 
+                        alt="Post media" 
+                        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                      {post.media_type === 'VIDEO' && (
+                        <div style={{ position: 'absolute', top: '0.5rem', right: '0.5rem', background: 'rgba(0,0,0,0.6)', padding: '0.2rem 0.4rem', borderRadius: '4px', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
+                          <Play size={10} fill="white" />
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ padding: '0.75rem' }}>
+                      <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                        {post.caption || '(Sem legenda)'}
+                      </p>
+                      <div style={{ display: 'flex', gap: '1rem', fontSize: '0.75rem', color: 'var(--text-primary)' }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                          <Heart size={12} color="#E1306C" /> {fmt(post.like_count)}
+                        </span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                          <MessageCircle size={12} color="#818CF8" /> {fmt(post.comments_count)}
+                        </span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                          <Eye size={12} color="#A78BFA" /> {fmt(post.insights?.reach || post.insights?.impressions || 0)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </a>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

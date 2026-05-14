@@ -11,6 +11,7 @@ const Database = require('better-sqlite3');
 const cron    = require('node-cron');
 const path    = require('path');
 const fs      = require('fs');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const PORT   = process.env.PORT || 3001;
 const DB_PATH = path.join(__dirname, 'partnerhub.db');
@@ -168,6 +169,54 @@ router.get('/instagram-stats', async (req, res) => {
       conversion_rate: find('profile_views') > 0 ? (find('follows_and_unfollows') / find('profile_views')) * 100 : 0,
       retention_rate: totalReach > 0 ? (find('profile_views') / totalReach) * 100 : 0
     });
+  } catch (e) { return err(res, e.message); }
+});
+
+// ── 1.8.2 Instagram Posts (API ao vivo) ─────────────────────
+router.get('/instagram-posts', async (req, res) => {
+  try {
+    if (!process.env.META_ACCESS_TOKEN || !process.env.META_IG_ACCOUNT_ID) {
+      return err(res, 'Configuração do Instagram ausente', 400);
+    }
+    const token = process.env.META_ACCESS_TOKEN;
+    const igId  = process.env.META_IG_ACCOUNT_ID;
+    const limit = parseInt(req.query.limit || '12', 10);
+
+    // Fetch latest media
+    const url = `https://graph.facebook.com/v19.0/${igId}/media?fields=id,caption,media_type,media_url,permalink,thumbnail_url,timestamp,comments_count,like_count&limit=${limit}&access_token=${token}`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+
+    if (data.error) return err(res, data.error.message);
+
+    // Optional: fetch insights for each media. Let's do it to get reach, saves etc.
+    const posts = data.data || [];
+    
+    const detailedPosts = await Promise.all(posts.map(async (post) => {
+      try {
+        let metrics = 'impressions,reach,saved';
+        // Some metrics are specific to media type
+        if (post.media_type === 'VIDEO') {
+          // 'video_views' is often available for videos
+          metrics = 'impressions,reach,saved,video_views';
+        }
+        const insUrl = `https://graph.facebook.com/v19.0/${post.id}/insights?metric=${metrics}&access_token=${token}`;
+        const insResp = await fetch(insUrl);
+        const insData = await insResp.json();
+        
+        let insights = {};
+        if (insData.data) {
+          insData.data.forEach((m) => {
+            insights[m.name] = m.values?.[0]?.value || 0;
+          });
+        }
+        return { ...post, insights };
+      } catch (e) {
+        return { ...post, insights: {} };
+      }
+    }));
+
+    return ok(res, detailedPosts);
   } catch (e) { return err(res, e.message); }
 });
 
@@ -373,6 +422,45 @@ router.get('/health', (req, res) => {
   return ok(res, { status: 'ok', db: DB_PATH });
 });
 
+// ── My Video Stats (para Benchmark) ─────────────────────────
+router.get('/my-video-stats', async (req, res) => {
+  try {
+    const apiKey = process.env.YOUTUBE_API_KEY;
+    const channelId = process.env.YOUTUBE_CHANNEL_ID;
+    if (!apiKey || !channelId) return err(res, 'YouTube não configurado', 500);
+
+    const uploadsId = channelId.replace('UC', 'UU');
+    const plUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsId}&maxResults=30&key=${apiKey}`;
+    const plResp = await fetch(plUrl);
+    const plData = await plResp.json();
+    if (!plData.items?.length) return ok(res, []);
+
+    const ids = plData.items.map(i => i.snippet.resourceId.videoId).join(',');
+    const vUrl = `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet,contentDetails&id=${ids}&key=${apiKey}`;
+    const vResp = await fetch(vUrl);
+    const vData = await vResp.json();
+    if (!vData.items) return ok(res, []);
+
+    const videos = vData.items.map(v => {
+      const views    = parseInt(v.statistics.viewCount    || '0', 10);
+      const likes    = parseInt(v.statistics.likeCount   || '0', 10);
+      const comments = parseInt(v.statistics.commentCount || '0', 10);
+      return {
+        id: v.id,
+        title: v.snippet.title,
+        publishedAt: v.snippet.publishedAt,
+        thumbnail: v.snippet.thumbnails?.medium?.url || '',
+        views, likes, comments,
+        duration: v.contentDetails?.duration || '',
+        engagementRate: views > 0 ? parseFloat(((likes + comments) / views * 100).toFixed(2)) : 0,
+        url: `https://www.youtube.com/watch?v=${v.id}`,
+      };
+    }).sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+
+    return ok(res, videos);
+  } catch (e) { return err(res, e.message); }
+});
+
 // ── 9. Competitor Channel Analysis ───────────────────────────
 // Cache em memória: { [channelId]: { data, expiresAt } }
 const competitorCache = new Map();
@@ -502,6 +590,123 @@ router.get('/competitor-channel', async (req, res) => {
     competitorCache.set(channelId, { data: result, expiresAt: Date.now() + CACHE_TTL_MS });
 
     return ok(res, result);
+  } catch (e) { return err(res, e.message); }
+});
+
+// ── 9.1 Instagram Competitor Analysis ─────────────────────────
+// Cache: { [username]: { data, expiresAt } }
+const igCompetitorCache = new Map();
+
+router.get('/instagram-competitor', async (req, res) => {
+  try {
+    const token = process.env.META_ACCESS_TOKEN;
+    const igId  = process.env.META_IG_ACCOUNT_ID;
+    if (!token || !igId) return err(res, 'Instagram não configurado', 500);
+
+    const username = req.query.username || '';
+    if (!username) return err(res, 'Informe um @username do Instagram', 400);
+    const cleanUsername = username.replace('@', '').trim();
+
+    // Cache check
+    const cached = igCompetitorCache.get(cleanUsername);
+    if (cached && cached.expiresAt > Date.now()) return ok(res, cached.data);
+
+    // Instagram Business Discovery API
+    // Must be queried ON the user's IG id
+    const fields = 'business_discovery.username(' + cleanUsername + '){username,name,profile_picture_url,biography,followers_count,media_count,media{id,caption,media_type,media_url,permalink,thumbnail_url,timestamp,comments_count,like_count}}';
+    
+    const url = `https://graph.facebook.com/v19.0/${igId}?fields=${fields}&access_token=${token}`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+
+    if (data.error) {
+      return err(res, data.error.error_user_title || 'Não foi possível acessar dados desse perfil. Ele pode não ser uma conta Comercial/Criador.', 404);
+    }
+
+    const bd = data.business_discovery;
+    if (!bd) return err(res, 'Perfil não encontrado', 404);
+
+    const channel = {
+      id: bd.username,
+      title: bd.name || bd.username,
+      description: bd.biography || '',
+      thumbnail: bd.profile_picture_url || '',
+      subscribers: bd.followers_count || 0,
+      videoCount: bd.media_count || 0,
+      customUrl: bd.username,
+      totalViews: 0 // Not applicable for IG account wide stats without insights
+    };
+
+    let videos = [];
+    if (bd.media && bd.media.data) {
+      videos = bd.media.data.map(m => {
+        const likes = m.like_count || 0;
+        const comments = m.comments_count || 0;
+        const totalEng = likes + comments;
+        // Engagement rate based on followers
+        const engRate = channel.subscribers > 0 ? (totalEng / channel.subscribers) * 100 : 0;
+        return {
+          id: m.id,
+          title: m.caption || '(Sem legenda)',
+          publishedAt: m.timestamp,
+          thumbnail: m.media_type === 'VIDEO' ? (m.thumbnail_url || m.media_url) : m.media_url,
+          views: 0, 
+          likes,
+          comments,
+          engagementRate: parseFloat(engRate.toFixed(2)),
+          duration: m.media_type, // Storing media type here
+          url: m.permalink,
+        };
+      });
+    }
+
+    const result = { channel, videos, fetchedAt: new Date().toISOString() };
+    igCompetitorCache.set(cleanUsername, { data: result, expiresAt: Date.now() + CACHE_TTL_MS });
+
+    return ok(res, result);
+
+  } catch (e) { return err(res, e.message); }
+});
+
+// ── 9.2 AI Competitor Analysis (Google Gemini) ──────────────────
+router.post('/analyze-competitor', async (req, res) => {
+  try {
+    const { platform, channelName, videos } = req.body;
+    
+    if (!process.env.GEMINI_API_KEY) {
+      return err(res, 'Chave da API do Google Gemini (GEMINI_API_KEY) não configurada no servidor.', 400);
+    }
+
+    if (!videos || videos.length === 0) {
+      return err(res, 'Nenhum vídeo/post fornecido para análise', 400);
+    }
+
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); // Fast and free tier
+
+    // Sort by most engagement (likes/comments) or views to get the best ones
+    const topContent = videos.slice(0, 15).map((v, i) => {
+      return `${i + 1}. Título/Legenda: "${v.title}"\n   Métricas: ${v.views ? v.views + ' views, ' : ''}${v.likes} curtidas, ${v.comments} comentários, ${v.engagementRate}% engajamento.\n   Data: ${v.publishedAt}`;
+    }).join('\n\n');
+
+    const prompt = `Você é um estrategista de conteúdo digital e expert em social media.
+Eu vou te passar os melhores posts/vídeos recentes do concorrente "${channelName}" na plataforma ${platform === 'youtube' ? 'YouTube' : 'Instagram'}.
+
+Aqui estão os conteúdos mais populares deles recentemente:
+${topContent}
+
+Com base nesses dados:
+1. Padrões de Sucesso: Quais são os padrões que você percebe nos títulos/legendas de maior sucesso? (ex: estilo de escrita, formato, gatilhos mentais)
+2. Tópicos em Alta: Quais parecem ser os temas ou palavras-chave que mais geram engajamento?
+3. Ideias Acionáveis: Me dê 3 ideias práticas de conteúdos ou formatos que eu posso criar para o meu próprio perfil com base no que está funcionando para eles.
+
+Responda em um formato de Markdown limpo e fácil de ler, usando negrito para destaques e bullet points. Seja direto e estratégico.`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+
+    return ok(res, { analysis: text });
   } catch (e) { return err(res, e.message); }
 });
 

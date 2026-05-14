@@ -6,6 +6,7 @@ import { Users, DollarSign, MousePointerClick, Video, Camera, Eye, Heart, UserPl
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
 import { API } from '../utils/format';
 
+
 const mockYoutubeData = [
   { name: 'Sem 1', views: 4000, subs: 120 },
   { name: 'Sem 2', views: 5500, subs: 150 },
@@ -304,6 +305,7 @@ export function Dashboard() {
     </div>
   );
 }
+
 
 function MetricCard({ title, value, sub, icon, progress, variant = 'default' }: { title: string, value: string, sub: string, icon: React.ReactNode, progress: number, variant?: 'default' | 'glass' }) {
   return (

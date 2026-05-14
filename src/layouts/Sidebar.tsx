@@ -2,7 +2,7 @@ import React from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   Video, Settings, Target, DollarSign,
-  MessageSquare, Camera, BarChart2, PlaySquare, Users
+  MessageSquare, Camera, BarChart2, PlaySquare, Users, Trophy
 } from 'lucide-react';
 import { cn } from '../components/Button';
 
@@ -24,6 +24,7 @@ export function Sidebar() {
         { name: 'Estratégia',    path: '/strategy',     icon: <Target size={17} />       },
         { name: 'Conteúdo',      path: '/content',      icon: <Video size={17} />        },
         { name: 'Concorrentes',  path: '/competitors',  icon: <Users size={17} />        },
+        { name: 'Benchmark',     path: '/benchmark',    icon: <Trophy size={17} />       },
         { name: 'Configurações', path: '/settings',     icon: <Settings size={17} />     },
       ]
     }

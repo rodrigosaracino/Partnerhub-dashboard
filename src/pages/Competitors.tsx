@@ -2,8 +2,9 @@ import { useState, useCallback } from 'react';
 import {
   Users, Plus, ExternalLink, ThumbsUp, MessageSquare,
   Eye, TrendingUp, RefreshCw, ChevronDown, ChevronUp,
-  Globe, Play, Search, AlertCircle, Loader2, Zap, X
+  Globe, Play, Search, AlertCircle, Loader2, Zap, X, Sparkles
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 
 // ─── Types ────────────────────────────────────────────────────
 interface ChannelInfo {
@@ -45,6 +46,7 @@ interface SavedChannel {
   thumbnail: string;
   subscribers: number;
   addedAt: string;
+  platform?: 'youtube' | 'instagram';
 }
 
 type SortKey = 'views' | 'likes' | 'engagementRate' | 'publishedAt';
@@ -88,7 +90,7 @@ function saveSaved(list: SavedChannel[]) {
 
 // ─── Sub-components ───────────────────────────────────────────
 
-function VideoCard({ video }: { video: VideoItem }) {
+function VideoCard({ video, platform }: { video: VideoItem, platform: 'youtube' | 'instagram' }) {
   const engColor = video.engagementRate >= 5
     ? 'var(--success)'
     : video.engagementRate >= 2
@@ -106,11 +108,11 @@ function VideoCard({ video }: { video: VideoItem }) {
       {/* Thumbnail */}
       <div className="video-thumb-wrap">
         <img src={video.thumbnail} alt={video.title} className="video-thumb" loading="lazy" />
-        {video.duration && (
+        {platform === 'youtube' && video.duration && (
           <span className="video-duration">{parseDuration(video.duration)}</span>
         )}
         <div className="video-play-overlay">
-          <Play size={28} fill="white" color="white" />
+          {(platform === 'youtube' || video.duration === 'VIDEO') && <Play size={28} fill="white" color="white" />}
         </div>
       </div>
 
@@ -120,10 +122,12 @@ function VideoCard({ video }: { video: VideoItem }) {
         <p className="video-date text-xs text-muted">{relativeDate(video.publishedAt)}</p>
 
         <div className="video-stats">
-          <span className="video-stat">
-            <Eye size={13} />
-            {fmt(video.views)}
-          </span>
+          {platform === 'youtube' && (
+            <span className="video-stat">
+              <Eye size={13} />
+              {fmt(video.views)}
+            </span>
+          )}
           <span className="video-stat">
             <ThumbsUp size={13} />
             {fmt(video.likes)}
@@ -178,6 +182,7 @@ export function Competitors() {
   const [input, setInput] = useState('');
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState('');
+  const [platformTab, setPlatformTab] = useState<'youtube' | 'instagram'>('youtube');
 
   // Active channel data
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -185,17 +190,22 @@ export function Competitors() {
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
+  // AI State
+  const [aiAnalyses, setAiAnalyses] = useState<Record<string, string>>({});
+  const [analyzingIds, setAnalyzingIds] = useState<Record<string, boolean>>({});
+
   // Filters
   const [sortKey, setSortKey] = useState<SortKey>('views');
   const [searchFilter, setSearchFilter] = useState('');
 
   // ── Fetch channel data ──────────────────────────────────────
-  const fetchChannel = useCallback(async (channelInput: string, channelId?: string) => {
+  const fetchChannel = useCallback(async (channelInput: string, platform: 'youtube' | 'instagram', channelId?: string) => {
     const lookupId = channelId || channelInput;
     setLoadingId(lookupId);
     setFetchError(null);
     try {
-      const resp = await fetch(`${API_BASE}/competitor-channel?id=${encodeURIComponent(channelInput)}`);
+      const endpoint = platform === 'instagram' ? 'instagram-competitor?username=' : 'competitor-channel?id=';
+      const resp = await fetch(`${API_BASE}/${endpoint}${encodeURIComponent(channelInput)}`);
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || 'Erro ao buscar canal');
       return data as CompetitorData;
@@ -212,12 +222,12 @@ export function Competitors() {
     setAdding(true);
     setAddError('');
     try {
-      const data = await fetchChannel(input.trim());
+      const data = await fetchChannel(input.trim(), platformTab);
       const { channel } = data;
 
       // Check duplicate
-      if (savedChannels.some(c => c.id === channel.id)) {
-        setAddError('Esse canal já foi adicionado.');
+      if (savedChannels.some(c => c.id === channel.id && (c.platform || 'youtube') === platformTab)) {
+        setAddError('Esse concorrente já foi adicionado.');
         return;
       }
 
@@ -228,6 +238,7 @@ export function Competitors() {
         thumbnail: channel.thumbnail,
         subscribers: channel.subscribers,
         addedAt: new Date().toISOString(),
+        platform: platformTab,
       };
 
       const updated = [...savedChannels, newEntry];
@@ -245,6 +256,31 @@ export function Competitors() {
     }
   };
 
+  // ── Analyze with AI ─────────────────────────────────────────
+  const handleAnalyze = async (id: string) => {
+    const data = channelData[id];
+    if (!data) return;
+    setAnalyzingIds(prev => ({ ...prev, [id]: true }));
+    try {
+      const resp = await fetch(`${API_BASE}/analyze-competitor`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          platform: platformTab,
+          channelName: data.channel.title,
+          videos: data.videos
+        })
+      });
+      const resData = await resp.json();
+      if (!resp.ok) throw new Error(resData.error || 'Erro na análise');
+      setAiAnalyses(prev => ({ ...prev, [id]: resData.analysis }));
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setAnalyzingIds(prev => ({ ...prev, [id]: false }));
+    }
+  };
+
   // ── Select / toggle channel ──────────────────────────────────
   const handleSelect = async (saved: SavedChannel) => {
     if (activeId === saved.id) {
@@ -256,7 +292,7 @@ export function Competitors() {
     if (channelData[saved.id]) return; // already cached
 
     try {
-      const data = await fetchChannel(saved.input, saved.id);
+      const data = await fetchChannel(saved.input, saved.platform || 'youtube', saved.id);
       setChannelData(prev => ({ ...prev, [saved.id]: data }));
       // Update subscribers in saved list
       setSavedChannels(prev => {
@@ -276,7 +312,7 @@ export function Competitors() {
     if (!saved) return;
     setFetchError(null);
     try {
-      const data = await fetchChannel(saved.input, saved.id);
+      const data = await fetchChannel(saved.input, saved.platform || 'youtube', saved.id);
       setChannelData(prev => ({ ...prev, [saved.id]: data }));
     } catch (e: any) {
       setFetchError(e.message);
@@ -309,13 +345,30 @@ export function Competitors() {
     <div className="competitors-page animate-fade-in">
       {/* ── Header ── */}
       <div className="page-header mb-6">
-        <div className="flex items-center gap-3">
-          <div className="comp-header-icon">
-            <Users size={22} />
+        <div className="flex items-center justify-between gap-3" style={{ flexWrap: 'wrap' }}>
+          <div className="flex items-center gap-3">
+            <div className="comp-header-icon" style={{ background: platformTab === 'instagram' ? 'linear-gradient(135deg, #E1306C 0%, #833AB4 100%)' : undefined, boxShadow: platformTab === 'instagram' ? '0 4px 20px rgba(225,48,108,0.35)' : undefined }}>
+              <Users size={22} />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold">Análise de Concorrentes</h1>
+              <p className="text-sm text-muted mt-1">Monitore os melhores conteúdos dos seus concorrentes no {platformTab === 'youtube' ? 'YouTube' : 'Instagram'}</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-2xl font-bold">Análise de Concorrentes</h1>
-            <p className="text-sm text-muted mt-1">Monitore os melhores conteúdos dos seus concorrentes no YouTube</p>
+          
+          <div style={{ display: 'flex', gap: '0.5rem', background: 'rgba(255,255,255,0.05)', padding: '0.25rem', borderRadius: '0.5rem' }}>
+            <button 
+              onClick={() => { setPlatformTab('youtube'); setActiveId(null); setInput(''); setAddError(''); }}
+              style={{ padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: 600, background: platformTab === 'youtube' ? 'var(--bg-glass)' : 'transparent', color: platformTab === 'youtube' ? 'white' : 'var(--text-secondary)' }}
+            >
+              YouTube
+            </button>
+            <button 
+              onClick={() => { setPlatformTab('instagram'); setActiveId(null); setInput(''); setAddError(''); }}
+              style={{ padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: 600, background: platformTab === 'instagram' ? 'var(--bg-glass)' : 'transparent', color: platformTab === 'instagram' ? 'white' : 'var(--text-secondary)' }}
+            >
+              Instagram
+            </button>
           </div>
         </div>
       </div>
@@ -332,7 +385,7 @@ export function Competitors() {
             <input
               type="text"
               className="comp-input"
-              placeholder="Cole a URL, @handle ou Channel ID do YouTube..."
+              placeholder={platformTab === 'youtube' ? 'Cole a URL, @handle ou Channel ID do YouTube...' : 'Cole o @username do Instagram...'}
               value={input}
               onChange={e => { setInput(e.target.value); setAddError(''); }}
               onKeyDown={e => e.key === 'Enter' && !adding && handleAdd()}
@@ -355,20 +408,24 @@ export function Competitors() {
           </p>
         )}
         <p className="text-xs text-muted mt-2">
-          Exemplos: <code>youtube.com/@MrBeast</code> · <code>@mkbhd</code> · <code>UCxxxxxx</code>
+          {platformTab === 'youtube' ? (
+            <>Exemplos: <code>youtube.com/@MrBeast</code> · <code>@mkbhd</code> · <code>UCxxxxxx</code></>
+          ) : (
+            <>Exemplos: <code>@mrbeast</code> · <code>thiagofinch</code></>
+          )}
         </p>
       </div>
 
       {/* ── Saved Channels List ── */}
-      {savedChannels.length === 0 ? (
+      {savedChannels.filter(c => (c.platform || 'youtube') === platformTab).length === 0 ? (
         <div className="comp-empty">
           <Users size={40} style={{ opacity: 0.3 }} />
           <p className="font-semibold mt-3">Nenhum concorrente adicionado</p>
-          <p className="text-sm text-muted mt-1">Adicione o primeiro canal acima para começar a análise</p>
+          <p className="text-sm text-muted mt-1">Adicione o primeiro {platformTab === 'youtube' ? 'canal' : 'perfil'} acima para começar a análise</p>
         </div>
       ) : (
         <div className="flex flex-col gap-3">
-          {savedChannels.map(saved => (
+          {savedChannels.filter(c => (c.platform || 'youtube') === platformTab).map(saved => (
             <div key={saved.id}>
               <ChannelRow
                 saved={saved}
@@ -423,28 +480,56 @@ export function Competitors() {
                           <div className="comp-bar-stat">
                             <Users size={14} />
                             <span>{fmt(activeData.channel.subscribers)}</span>
-                            <span className="text-xs text-muted">inscritos</span>
+                            <span className="text-xs text-muted">{platformTab === 'youtube' ? 'inscritos' : 'seguidores'}</span>
                           </div>
-                          <div className="comp-bar-stat">
-                            <Eye size={14} />
-                            <span>{fmt(activeData.channel.totalViews)}</span>
-                            <span className="text-xs text-muted">views totais</span>
-                          </div>
+                          {platformTab === 'youtube' && (
+                            <div className="comp-bar-stat">
+                              <Eye size={14} />
+                              <span>{fmt(activeData.channel.totalViews)}</span>
+                              <span className="text-xs text-muted">views totais</span>
+                            </div>
+                          )}
                           <div className="comp-bar-stat">
                             <Play size={14} />
                             <span>{fmt(activeData.channel.videoCount)}</span>
-                            <span className="text-xs text-muted">vídeos</span>
+                            <span className="text-xs text-muted">{platformTab === 'youtube' ? 'vídeos' : 'posts'}</span>
                           </div>
-                          <div className="comp-bar-stat">
-                            <TrendingUp size={14} />
-                            <span>{activeData.videos.length > 0 ? fmt(Math.round(activeData.videos.reduce((s,v) => s + v.views, 0) / activeData.videos.length)) : '—'}</span>
-                            <span className="text-xs text-muted">média views/vídeo</span>
-                          </div>
+                          {platformTab === 'youtube' && (
+                            <div className="comp-bar-stat">
+                              <TrendingUp size={14} />
+                              <span>{activeData.videos.length > 0 ? fmt(Math.round(activeData.videos.reduce((s: number, v: any) => s + v.views, 0) / activeData.videos.length)) : '—'}</span>
+                              <span className="text-xs text-muted">média views/vídeo</span>
+                            </div>
+                          )}
                         </div>
 
                         <button className="comp-refresh-btn" onClick={(e) => { e.stopPropagation(); handleRefresh(); }} title="Atualizar dados">
                           <RefreshCw size={15} />
                         </button>
+                      </div>
+
+                      {/* AI Analysis Section */}
+                      <div className="glass-panel" style={{ margin: '1rem 0', padding: '1.25rem', border: '1px solid rgba(168, 85, 247, 0.4)', background: 'rgba(168, 85, 247, 0.05)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: aiAnalyses[saved.id] ? '1rem' : '0' }}>
+                          <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '1rem', fontWeight: 600, color: '#c084fc' }}>
+                            <Sparkles size={18} /> Inteligência Artificial (Google Gemini)
+                          </h3>
+                          {!aiAnalyses[saved.id] && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleAnalyze(saved.id); }}
+                              disabled={analyzingIds[saved.id]}
+                              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#9333ea', color: 'white', padding: '0.5rem 1rem', borderRadius: '0.375rem', fontSize: '0.875rem', fontWeight: 600, border: 'none', cursor: analyzingIds[saved.id] ? 'not-allowed' : 'pointer' }}
+                            >
+                              {analyzingIds[saved.id] ? <Loader2 size={16} className="spin" /> : <Sparkles size={16} />}
+                              {analyzingIds[saved.id] ? 'Analisando...' : 'Analisar Padrões'}
+                            </button>
+                          )}
+                        </div>
+                        {aiAnalyses[saved.id] && (
+                          <div style={{ fontSize: '0.9rem', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
+                            <ReactMarkdown>{aiAnalyses[saved.id]}</ReactMarkdown>
+                          </div>
+                        )}
                       </div>
 
                       {/* Filters */}
@@ -486,11 +571,11 @@ export function Competitors() {
 
                       {/* Videos Grid */}
                       {filteredVideos.length === 0 ? (
-                        <p className="text-center text-muted p-6">Nenhum vídeo encontrado com esse filtro.</p>
+                        <p className="text-center text-muted p-6">Nenhum {platformTab === 'youtube' ? 'vídeo' : 'post'} encontrado com esse filtro.</p>
                       ) : (
                         <div className="comp-videos-grid">
-                          {filteredVideos.map(video => (
-                            <VideoCard key={video.id} video={video} />
+                          {filteredVideos.map((video: any) => (
+                            <VideoCard key={video.id} video={video} platform={platformTab} />
                           ))}
                         </div>
                       )}

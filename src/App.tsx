@@ -9,6 +9,7 @@ import { DashboardMix } from './pages/DashboardMix';
 import { DashboardInstagram } from './pages/DashboardInstagram';
 import { DashboardYoutube } from './pages/DashboardYoutube';
 import { Competitors } from './pages/Competitors';
+import { Benchmark } from './pages/Benchmark';
 
 import { SWRConfig } from 'swr';
 
@@ -34,6 +35,7 @@ function App() {
           <Route path="strategy" element={<Strategy />} />
           <Route path="content" element={<Content />} />
           <Route path="competitors" element={<Competitors />} />
+          <Route path="benchmark" element={<Benchmark />} />
           <Route path="docs" element={<div style={{padding:'2rem',color:'var(--text-secondary)'}}>Página não disponível.</div>} />
           <Route path="settings" element={<div className="p-4">Configurações</div>} />
         </Route>

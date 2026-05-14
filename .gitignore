@@ -33,6 +33,11 @@ server/.env.*
 # Wrangler local state (D1 database, KV, etc.)
 **/.wrangler/
 
+# SQLite database (runtime data, never commit)
+*.db
+*.db-shm
+*.db-wal
+
 # TypeScript build cache
 tsconfig.*.tsbuildinfo
 
