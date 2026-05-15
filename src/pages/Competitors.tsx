@@ -5,6 +5,18 @@ import {
   Globe, Play, Search, AlertCircle, Loader2, Zap, X, Sparkles
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import { getToken } from './Login';
+
+function authFetch(url: string, options: RequestInit = {}) {
+  const token = getToken();
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+}
 
 // ─── Types ────────────────────────────────────────────────────
 interface ChannelInfo {
@@ -205,7 +217,7 @@ export function Competitors() {
     setFetchError(null);
     try {
       const endpoint = platform === 'instagram' ? 'instagram-competitor?username=' : 'competitor-channel?id=';
-      const resp = await fetch(`${API_BASE}/${endpoint}${encodeURIComponent(channelInput)}`);
+      const resp = await authFetch(`${API_BASE}/${endpoint}${encodeURIComponent(channelInput)}`);
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || 'Erro ao buscar canal');
       return data as CompetitorData;
@@ -262,7 +274,7 @@ export function Competitors() {
     if (!data) return;
     setAnalyzingIds(prev => ({ ...prev, [id]: true }));
     try {
-      const resp = await fetch(`${API_BASE}/analyze-competitor`, {
+      const resp = await authFetch(`${API_BASE}/analyze-competitor`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
