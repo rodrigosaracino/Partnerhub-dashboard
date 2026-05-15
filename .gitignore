@@ -44,3 +44,4 @@ tsconfig.*.tsbuildinfo
 # Personal documents
 *.docx
 *.txt
+scripts/

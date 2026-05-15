@@ -13,6 +13,7 @@ const path    = require('path');
 const fs      = require('fs');
 const jwt     = require('jsonwebtoken');
 const bcrypt  = require('bcrypt');
+const { google } = require('googleapis');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const PORT   = process.env.PORT || 3001;
@@ -746,6 +747,178 @@ app.post('/api/auth/login', async (req, res) => {
   const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: '30d' });
   return res.json({ token });
 });
+
+// ── YouTube Analytics OAuth + Backfill ───────────────────────
+const YT_CLIENT_ID     = process.env.YOUTUBE_ANALYTICS_CLIENT_ID || '';
+const YT_CLIENT_SECRET = process.env.YOUTUBE_ANALYTICS_CLIENT_SECRET || '';
+const YT_REDIRECT_URI  = 'https://dash.amzcursos.com/api/auth/youtube/callback';
+
+function getYtOAuthClient() {
+  const client = new google.auth.OAuth2(YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REDIRECT_URI);
+  if (process.env.YOUTUBE_ANALYTICS_REFRESH_TOKEN) {
+    client.setCredentials({ refresh_token: process.env.YOUTUBE_ANALYTICS_REFRESH_TOKEN });
+  }
+  return client;
+}
+
+// Público: inicia fluxo OAuth do YouTube Analytics
+app.get('/api/auth/youtube', (req, res) => {
+  const client = getYtOAuthClient();
+  const url = client.generateAuthUrl({
+    access_type: 'offline',
+    prompt: 'consent',
+    scope: [
+      'https://www.googleapis.com/auth/yt-analytics.readonly',
+      'https://www.googleapis.com/auth/youtube.readonly',
+    ],
+  });
+  res.redirect(url);
+});
+
+// Público: callback OAuth — salva token e dispara backfill
+app.get('/api/auth/youtube/callback', async (req, res) => {
+  const { code, error } = req.query;
+  if (error) return res.send(`<h2>Erro OAuth: ${error}</h2>`);
+  try {
+    const client = getYtOAuthClient();
+    const { tokens } = await client.getToken(code);
+    const refreshToken = tokens.refresh_token;
+    if (!refreshToken) return res.send('<h2>Erro: refresh_token não retornado. Tente novamente.</h2>');
+
+    // Salva no .env
+    const envPath = path.join(__dirname, '.env');
+    let envContent = fs.readFileSync(envPath, 'utf8');
+    if (envContent.includes('YOUTUBE_ANALYTICS_REFRESH_TOKEN=')) {
+      envContent = envContent.replace(/YOUTUBE_ANALYTICS_REFRESH_TOKEN=.*/m, `YOUTUBE_ANALYTICS_REFRESH_TOKEN=${refreshToken}`);
+    } else {
+      envContent += `\nYOUTUBE_ANALYTICS_REFRESH_TOKEN=${refreshToken}`;
+    }
+    fs.writeFileSync(envPath, envContent);
+    process.env.YOUTUBE_ANALYTICS_REFRESH_TOKEN = refreshToken;
+
+    // Dispara backfills em background
+    backfillYouTube().catch(e => console.error('[backfill YT]', e.message));
+    backfillInstagram().catch(e => console.error('[backfill IG]', e.message));
+
+    res.send(`<h2 style="font-family:sans-serif;color:#4ade80;padding:2rem">
+      ✅ YouTube Analytics autorizado!<br>
+      <small style="color:#aaa;font-size:1rem">Importando dados históricos em background — pode fechar esta aba.</small>
+    </h2>`);
+  } catch (e) {
+    console.error('[OAuth callback]', e.message);
+    res.send(`<h2>Erro: ${e.message}</h2>`);
+  }
+});
+
+// ── Backfill YouTube Analytics ────────────────────────────────
+async function backfillYouTube() {
+  console.log('[backfill YT] Iniciando...');
+  const authClient = getYtOAuthClient();
+  const ytAnalytics = google.youtubeAnalytics({ version: 'v2', auth: authClient });
+  const ytData      = google.youtube({ version: 'v3', auth: authClient });
+
+  // Descobre channel ID autenticado
+  const chRes = await ytData.channels.list({ part: 'id,statistics', mine: true });
+  const ch = chRes.data.items?.[0];
+  if (!ch) throw new Error('Canal não encontrado');
+  const channelId = ch.id;
+  const currentSubs = parseInt(ch.statistics.subscriberCount || '0', 10);
+  const currentViews = parseInt(ch.statistics.viewCount || '0', 10);
+  const currentVideos = parseInt(ch.statistics.videoCount || '0', 10);
+
+  // Busca dados mensais dos últimos 18 meses
+  const endDate   = new Date();
+  const startDate = new Date();
+  startDate.setMonth(startDate.getMonth() - 17);
+  startDate.setDate(1);
+
+  const report = await ytAnalytics.reports.query({
+    ids:       `channel==${channelId}`,
+    startDate: startDate.toISOString().split('T')[0],
+    endDate:   endDate.toISOString().split('T')[0],
+    metrics:   'views,subscribersGained,subscribersLost',
+    dimensions:'month',
+    sort:      'month',
+  });
+
+  const rows = report.data.rows || [];
+  if (!rows.length) { console.log('[backfill YT] Sem dados retornados'); return; }
+
+  // Reconstrói contagem de inscritos retroativamente a partir do valor atual
+  let runSubs = currentSubs;
+  let runViews = currentViews;
+  const monthly = [...rows].reverse().map(([month, views, gained, lost]) => {
+    const entry = { month, subs: Math.max(0, runSubs), views: Math.max(0, runViews) };
+    runSubs  -= (gained - lost);
+    runViews -= views;
+    return entry;
+  }).reverse();
+
+  // Insere ou atualiza no banco
+  const upsert = db.prepare(`
+    INSERT INTO youtube_history (date, subscribers, views, videos)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(date) DO UPDATE SET subscribers=excluded.subscribers, views=excluded.views, videos=excluded.videos
+  `);
+  const insertMany = db.transaction((rows) => {
+    for (const r of rows) upsert.run(r.month + '-01', r.subs, r.views, currentVideos);
+  });
+  insertMany(monthly);
+  console.log(`[backfill YT] ${monthly.length} meses importados.`);
+}
+
+// ── Backfill Instagram ────────────────────────────────────────
+async function backfillInstagram() {
+  console.log('[backfill IG] Iniciando...');
+  const token = process.env.META_ACCESS_TOKEN;
+  const igId  = process.env.META_IG_ACCOUNT_ID;
+  if (!token || !igId) throw new Error('Meta não configurado');
+
+  // Seguidores atuais
+  const profileResp = await fetch(`https://graph.facebook.com/v19.0/${igId}?fields=followers_count,media_count&access_token=${token}`);
+  const profile = await profileResp.json();
+  const currentFollowers = profile.followers_count || 0;
+
+  // Busca reach diário dos últimos 12 meses e agrega por mês
+  const endDate   = new Date();
+  const startDate = new Date();
+  startDate.setMonth(startDate.getMonth() - 11);
+  startDate.setDate(1);
+
+  const since = Math.floor(startDate.getTime() / 1000);
+  const until = Math.floor(endDate.getTime() / 1000);
+
+  const insightUrl = `https://graph.facebook.com/v19.0/${igId}/insights?metric=reach,profile_views&period=day&since=${since}&until=${until}&access_token=${token}`;
+  const insightResp = await fetch(insightUrl);
+  const insightData = await insightResp.json();
+
+  if (insightData.error) throw new Error(insightData.error.message);
+
+  // Agrupa valores diários por mês
+  const byMonth = {};
+  for (const metric of (insightData.data || [])) {
+    for (const val of (metric.values || [])) {
+      const d = new Date(val.end_time);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (!byMonth[key]) byMonth[key] = { reach: 0, profile_views: 0 };
+      byMonth[key][metric.name] = (byMonth[key][metric.name] || 0) + (val.value || 0);
+    }
+  }
+
+  const upsert = db.prepare(`
+    INSERT INTO instagram_history (date, followers, reach, profile_views)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(date) DO UPDATE SET followers=excluded.followers, reach=excluded.reach, profile_views=excluded.profile_views
+  `);
+  const insertMany = db.transaction((entries) => {
+    for (const [month, vals] of entries) {
+      upsert.run(month + '-01', currentFollowers, vals.reach, vals.profile_views);
+    }
+  });
+  const entries = Object.entries(byMonth).sort(([a], [b]) => a.localeCompare(b));
+  insertMany(entries);
+  console.log(`[backfill IG] ${entries.length} meses importados.`);
+}
 
 // Todas as rotas /api/* exigem autenticação
 app.use('/api', requireAuth, router);
