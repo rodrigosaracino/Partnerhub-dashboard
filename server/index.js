@@ -21,7 +21,7 @@ const DB_PATH = path.join(__dirname, 'partnerhub.db');
 
 // ── Banco de Dados ──────────────────────────────────────────
 const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
+db.pragma('journal_mode = DELETE'); // WAL incompatível com Docker bind-mount
 db.pragma('foreign_keys = ON');
 
 // Inicializar schema
@@ -270,56 +270,73 @@ router.get('/youtube-analytics', async (req, res) => {
     const sd = startDate.toISOString().split('T')[0];
     const ed = endDate.toISOString().split('T')[0];
 
-    const [monthlyRes, sourcesRes] = await Promise.allSettled([
-      ytAnalytics.reports.query({
-        ids: `channel==${channelId}`, startDate: sd, endDate: ed, sort: 'month',
-        dimensions: 'month',
-        metrics: 'views,estimatedMinutesWatched,averageViewDuration,subscribersGained,subscribersLost,impressions,impressionsClickThroughRate',
-      }),
-      ytAnalytics.reports.query({
-        ids: `channel==${channelId}`, startDate: sd, endDate: ed, sort: '-views',
-        dimensions: 'insightTrafficSourceType',
-        metrics: 'views',
-      }),
-    ]);
-
     const SOURCE_LABELS = {
       YT_SEARCH: 'Pesquisa YouTube', SUGGESTED_VIDEO: 'Vídeos Sugeridos',
       BROWSE_FEATURES: 'Página Inicial / Navegação', EXTERNAL: 'Sites Externos',
       NOTIFICATION: 'Notificações', PLAYLIST: 'Playlists',
       NO_LINK_OTHER_: 'Outros / Direto', SUBSCRIBER: 'Feed de Inscrições',
       YT_CHANNEL: 'Página do Canal', END_SCREEN: 'Tela Final',
+      SHORTS: 'YouTube Shorts',
     };
 
-    const monthly = (monthlyRes.status === 'fulfilled' ? monthlyRes.value.data.rows || [] : []).map(r => ({
-      name:              r[0].slice(0, 7),
-      views:             r[1] || 0,
-      watchTimeHours:    Math.round((r[2] || 0) / 60),
-      avgViewDuration:   Math.round(r[3] || 0),
-      subsGained:        r[4] || 0,
-      subsLost:          r[5] || 0,
-      impressions:       r[6] || 0,
-      ctr:               parseFloat(((r[7] || 0) * 100).toFixed(2)),
-    }));
+    // Query básica — sempre disponível
+    const [basicRes, sourcesRes, impressionsRes] = await Promise.allSettled([
+      ytAnalytics.reports.query({
+        ids: `channel==${channelId}`, startDate: sd, endDate: ed, sort: 'month',
+        dimensions: 'month',
+        metrics: 'views,estimatedMinutesWatched,averageViewDuration,subscribersGained,subscribersLost',
+      }),
+      ytAnalytics.reports.query({
+        ids: `channel==${channelId}`, startDate: sd, endDate: ed, sort: '-views',
+        dimensions: 'insightTrafficSourceType',
+        metrics: 'views',
+      }),
+      // Impressões/CTR — só disponível para canais no YPP (≥1k inscritos)
+      ytAnalytics.reports.query({
+        ids: `channel==${channelId}`, startDate: sd, endDate: ed, sort: 'month',
+        dimensions: 'month',
+        metrics: 'impressions,impressionsClickThroughRate',
+      }),
+    ]);
 
-    const totalViews   = monthly.reduce((s, r) => s + r.views, 0);
-    const trafficRaw   = sourcesRes.status === 'fulfilled' ? sourcesRes.value.data.rows || [] : [];
+    const basicRows = basicRes.status === 'fulfilled' ? basicRes.value.data.rows || [] : [];
+    const impressionsRows = impressionsRes.status === 'fulfilled' ? impressionsRes.value.data.rows || [] : [];
+    const impressionsMap = Object.fromEntries(impressionsRows.map(r => [r[0].slice(0, 7), { impressions: r[1] || 0, ctr: parseFloat(((r[2] || 0) * 100).toFixed(2)) }]));
+
+    const monthly = basicRows.map(r => {
+      const key = r[0].slice(0, 7);
+      const imp = impressionsMap[key] || { impressions: 0, ctr: 0 };
+      return {
+        name:            key,
+        views:           r[1] || 0,
+        watchTimeHours:  Math.round((r[2] || 0) / 60),
+        avgViewDuration: Math.round(r[3] || 0),
+        subsGained:      r[4] || 0,
+        subsLost:        r[5] || 0,
+        impressions:     imp.impressions,
+        ctr:             imp.ctr,
+      };
+    });
+
+    const trafficRaw = sourcesRes.status === 'fulfilled' ? sourcesRes.value.data.rows || [] : [];
+    const trafficTotal = trafficRaw.reduce((s, r) => s + (r[1] || 0), 0);
     const trafficSources = trafficRaw.map(r => ({
       source: SOURCE_LABELS[r[0]] || r[0],
       views:  r[1] || 0,
-      pct:    totalViews > 0 ? parseFloat(((r[1] / totalViews) * 100).toFixed(1)) : 0,
+      pct:    trafficTotal > 0 ? parseFloat(((r[1] / trafficTotal) * 100).toFixed(1)) : 0,
     })).sort((a, b) => b.views - a.views);
 
+    const hasImpressions = impressionsRows.length > 0;
     const summary = {
-      impressions:    monthly.reduce((s, r) => s + r.impressions, 0),
-      ctr:            monthly.length ? parseFloat((monthly.reduce((s, r) => s + r.ctr, 0) / monthly.length).toFixed(2)) : 0,
-      watchTimeHours: monthly.reduce((s, r) => s + r.watchTimeHours, 0),
-      avgViewDuration:monthly.length ? Math.round(monthly.reduce((s, r) => s + r.avgViewDuration, 0) / monthly.length) : 0,
-      subsGained:     monthly.reduce((s, r) => s + r.subsGained, 0),
-      subsLost:       monthly.reduce((s, r) => s + r.subsLost, 0),
+      impressions:     hasImpressions ? monthly.reduce((s, r) => s + r.impressions, 0) : null,
+      ctr:             hasImpressions && monthly.length ? parseFloat((monthly.reduce((s, r) => s + r.ctr, 0) / monthly.length).toFixed(2)) : null,
+      watchTimeHours:  monthly.reduce((s, r) => s + r.watchTimeHours, 0),
+      avgViewDuration: monthly.length ? Math.round(monthly.reduce((s, r) => s + r.avgViewDuration, 0) / monthly.length) : 0,
+      subsGained:      monthly.reduce((s, r) => s + r.subsGained, 0),
+      subsLost:        monthly.reduce((s, r) => s + r.subsLost, 0),
     };
 
-    return ok(res, { summary, monthly, trafficSources });
+    return ok(res, { summary, monthly, trafficSources, hasImpressions });
   } catch (e) { return err(res, e.message); }
 });
 
