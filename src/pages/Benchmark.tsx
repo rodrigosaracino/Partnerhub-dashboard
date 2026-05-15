@@ -4,6 +4,12 @@ import { Trophy, Users, Loader2, AlertCircle, RefreshCw, ExternalLink } from 'lu
 import { Card, CardContent } from '../components/Card';
 import { Badge } from '../components/Badge';
 import { API } from '../utils/format';
+import { getToken } from './Login';
+
+function authFetch(url: string) {
+  const token = getToken();
+  return fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+}
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -357,12 +363,12 @@ export function Benchmark() {
     setFetchErrors({});
 
     const ytP = ytSaved.map(c =>
-      fetch(`${API}/competitor-channel?id=${encodeURIComponent(c.input)}`)
+      authFetch(`${API}/competitor-channel?id=${encodeURIComponent(c.input)}`)
         .then(r => r.json()).then(d => ({ id: c.id, d, ok: !d.error, platform: 'yt' }))
         .catch(e => ({ id: c.id, d: null, ok: false, error: e.message, platform: 'yt' }))
     );
     const igP = igSaved.map(c =>
-      fetch(`${API}/instagram-competitor?username=${encodeURIComponent(c.input)}`)
+      authFetch(`${API}/instagram-competitor?username=${encodeURIComponent(c.input)}`)
         .then(r => r.json()).then(d => ({ id: c.id, d, ok: !d.error, platform: 'ig' }))
         .catch(e => ({ id: c.id, d: null, ok: false, error: e.message, platform: 'ig' }))
     );
