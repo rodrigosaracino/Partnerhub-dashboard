@@ -7,21 +7,6 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { API } from '../utils/format';
 
 
-const mockYoutubeData = [
-  { name: 'Sem 1', views: 4000, subs: 120 },
-  { name: 'Sem 2', views: 5500, subs: 150 },
-  { name: 'Sem 3', views: 8000, subs: 280 },
-  { name: 'Sem 4', views: 12000, subs: 450 },
-  { name: 'Sem 5', views: 18000, subs: 600 },
-];
-
-const mockFunnelData = [
-  { name: 'Sem 1', leads: 0, vendas: 0 },
-  { name: 'Sem 2', leads: 0, vendas: 0 },
-  { name: 'Sem 3', leads: 0, vendas: 0 },
-  { name: 'Sem 4', leads: 0, vendas: 0 },
-  { name: 'Sem 5', leads: 0, vendas: 0 },
-];
 
 export function Dashboard() {
   const { data: youtubeStats } = useSWR(`${API}/channel-stats`);
@@ -151,21 +136,29 @@ export function Dashboard() {
             <CardTitle>Crescimento do YouTube</CardTitle>
           </CardHeader>
           <CardContent style={{ height: '320px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={youtubeGrowth.length > 0 ? youtubeGrowth : mockYoutubeData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="colorInscritos" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--danger)" stopOpacity={0.8}/>
-                    <stop offset="95%" stopColor="var(--danger)" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="name" stroke="var(--text-tertiary)" tick={{ fontSize: 12 }} interval="preserveStartEnd" />
-                <YAxis stroke="var(--text-tertiary)" />
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
-                <Tooltip contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: '8px' }} />
-                <Area type="monotone" dataKey="inscritos" stroke="var(--danger)" fillOpacity={1} fill="url(#colorInscritos)" name="Inscritos" />
-              </AreaChart>
-            </ResponsiveContainer>
+            {youtubeGrowth.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={youtubeGrowth} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorInscritos" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--danger)" stopOpacity={0.8}/>
+                      <stop offset="95%" stopColor="var(--danger)" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="name" stroke="var(--text-tertiary)" tick={{ fontSize: 12 }} interval="preserveStartEnd" />
+                  <YAxis stroke="var(--text-tertiary)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
+                  <Tooltip contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: '8px' }} />
+                  <Area type="monotone" dataKey="inscritos" stroke="var(--danger)" fillOpacity={1} fill="url(#colorInscritos)" name="Inscritos" />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center gap-2 text-muted">
+                <TrendingUp size={28} className="opacity-20" />
+                <p className="text-sm">Sem dados históricos ainda</p>
+                <p className="text-xs opacity-60">Os snapshots diários serão registrados automaticamente</p>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -174,18 +167,26 @@ export function Dashboard() {
             <CardTitle>Histórico de Anúncios (Leads vs Investimento)</CardTitle>
           </CardHeader>
           <CardContent style={{ height: '320px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={metaGrowth.length > 0 ? metaGrowth : mockFunnelData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-                <XAxis dataKey="name" stroke="var(--text-tertiary)" />
-                <YAxis yAxisId="left" stroke="var(--text-tertiary)" />
-                <YAxis yAxisId="right" orientation="right" stroke="var(--text-tertiary)" />
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
-                <Tooltip contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: '8px', color: 'white' }} />
-                <Legend />
-                <Bar yAxisId="left" dataKey="leads" fill="var(--accent-secondary)" name="Leads Gerados" radius={[4, 4, 0, 0]} />
-                <Bar yAxisId="right" dataKey="spend" fill="var(--warning)" name="Investimento (R$)" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            {metaGrowth.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={metaGrowth} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+                  <XAxis dataKey="name" stroke="var(--text-tertiary)" />
+                  <YAxis yAxisId="left" stroke="var(--text-tertiary)" />
+                  <YAxis yAxisId="right" orientation="right" stroke="var(--text-tertiary)" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
+                  <Tooltip contentStyle={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', borderRadius: '8px', color: 'white' }} />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="leads" fill="var(--accent-secondary)" name="Leads Gerados" radius={[4, 4, 0, 0]} />
+                  <Bar yAxisId="right" dataKey="spend" fill="var(--warning)" name="Investimento (R$)" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center gap-2 text-muted">
+                <DollarSign size={28} className="opacity-20" />
+                <p className="text-sm">Sem dados de anúncios ainda</p>
+                <p className="text-xs opacity-60">Configure o token do Meta Ads para sincronizar</p>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
