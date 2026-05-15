@@ -826,13 +826,11 @@ async function backfillYouTube() {
   const currentViews = parseInt(ch.statistics.viewCount || '0', 10);
   const currentVideos = parseInt(ch.statistics.videoCount || '0', 10);
 
-  // Busca dados mensais dos últimos 18 meses
-  // endDate deve ser o último dia do mês anterior (API exige mês completo com dimension=month)
+  // Com dimension=month a API exige que start e end sejam sempre YYYY-MM-01
   const endDate = new Date();
-  endDate.setDate(0); // último dia do mês anterior
+  endDate.setDate(1); // primeiro dia do mês atual (inclui dados até o mês anterior completo)
   const startDate = new Date(endDate);
-  startDate.setMonth(startDate.getMonth() - 17);
-  startDate.setDate(1);
+  startDate.setMonth(startDate.getMonth() - 18);
 
   const report = await ytAnalytics.reports.query({
     ids:       `channel==${channelId}`,
@@ -891,21 +889,30 @@ async function backfillInstagram() {
   const since = Math.floor(startDate.getTime() / 1000);
   const until = Math.floor(endDate.getTime() / 1000);
 
-  // Busca reach diário — profile_views requer metric_type=total_value (API diferente)
-  const reachUrl = `https://graph.facebook.com/v19.0/${igId}/insights?metric=reach&period=day&since=${since}&until=${until}&access_token=${token}`;
-  const reachResp = await fetch(reachUrl);
-  const reachData = await reachResp.json();
-  if (reachData.error) throw new Error(reachData.error.message);
-
-  // Agrupa reach diário por mês
+  // Instagram limita a 30 dias por requisição — busca mês a mês
   const byMonth = {};
-  for (const metric of (reachData.data || [])) {
-    for (const val of (metric.values || [])) {
-      const d = new Date(val.end_time);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      if (!byMonth[key]) byMonth[key] = { reach: 0 };
-      byMonth[key].reach += (val.value || 0);
+  for (let i = 11; i >= 0; i--) {
+    const mStart = new Date();
+    mStart.setDate(1);
+    mStart.setMonth(mStart.getMonth() - i);
+    const mEnd = new Date(mStart);
+    mEnd.setMonth(mEnd.getMonth() + 1);
+    mEnd.setDate(0); // último dia do mês
+
+    const s = Math.floor(mStart.getTime() / 1000);
+    const u = Math.floor(mEnd.getTime() / 1000);
+    const key = `${mStart.getFullYear()}-${String(mStart.getMonth() + 1).padStart(2, '0')}`;
+
+    const url = `https://graph.facebook.com/v19.0/${igId}/insights?metric=reach&period=day&since=${s}&until=${u}&access_token=${token}`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+    if (data.error) { console.warn(`[backfill IG] ${key}:`, data.error.message); continue; }
+
+    let monthReach = 0;
+    for (const metric of (data.data || [])) {
+      for (const val of (metric.values || [])) monthReach += (val.value || 0);
     }
+    byMonth[key] = { reach: monthReach };
   }
 
   const upsert = db.prepare(`
