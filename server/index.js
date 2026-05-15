@@ -749,12 +749,12 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // ── YouTube Analytics OAuth + Backfill ───────────────────────
-const YT_CLIENT_ID     = process.env.YOUTUBE_ANALYTICS_CLIENT_ID || '';
-const YT_CLIENT_SECRET = process.env.YOUTUBE_ANALYTICS_CLIENT_SECRET || '';
-const YT_REDIRECT_URI  = 'https://dash.amzcursos.com/api/auth/youtube/callback';
+const YT_REDIRECT_URI = 'https://dash.amzcursos.com/api/auth/youtube/callback';
 
 function getYtOAuthClient() {
-  const client = new google.auth.OAuth2(YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REDIRECT_URI);
+  const clientId     = process.env.YOUTUBE_ANALYTICS_CLIENT_ID;
+  const clientSecret = process.env.YOUTUBE_ANALYTICS_CLIENT_SECRET;
+  const client = new google.auth.OAuth2(clientId, clientSecret, YT_REDIRECT_URI);
   if (process.env.YOUTUBE_ANALYTICS_REFRESH_TOKEN) {
     client.setCredentials({ refresh_token: process.env.YOUTUBE_ANALYTICS_REFRESH_TOKEN });
   }
@@ -827,8 +827,10 @@ async function backfillYouTube() {
   const currentVideos = parseInt(ch.statistics.videoCount || '0', 10);
 
   // Busca dados mensais dos últimos 18 meses
-  const endDate   = new Date();
-  const startDate = new Date();
+  // endDate deve ser o último dia do mês anterior (API exige mês completo com dimension=month)
+  const endDate = new Date();
+  endDate.setDate(0); // último dia do mês anterior
+  const startDate = new Date(endDate);
   startDate.setMonth(startDate.getMonth() - 17);
   startDate.setDate(1);
 
@@ -864,6 +866,7 @@ async function backfillYouTube() {
     for (const r of rows) upsert.run(r.month + '-01', r.subs, r.views, currentVideos);
   });
   insertMany(monthly);
+  db.pragma('wal_checkpoint(TRUNCATE)');
   console.log(`[backfill YT] ${monthly.length} meses importados.`);
 }
 
@@ -888,20 +891,20 @@ async function backfillInstagram() {
   const since = Math.floor(startDate.getTime() / 1000);
   const until = Math.floor(endDate.getTime() / 1000);
 
-  const insightUrl = `https://graph.facebook.com/v19.0/${igId}/insights?metric=reach,profile_views&period=day&since=${since}&until=${until}&access_token=${token}`;
-  const insightResp = await fetch(insightUrl);
-  const insightData = await insightResp.json();
+  // Busca reach diário — profile_views requer metric_type=total_value (API diferente)
+  const reachUrl = `https://graph.facebook.com/v19.0/${igId}/insights?metric=reach&period=day&since=${since}&until=${until}&access_token=${token}`;
+  const reachResp = await fetch(reachUrl);
+  const reachData = await reachResp.json();
+  if (reachData.error) throw new Error(reachData.error.message);
 
-  if (insightData.error) throw new Error(insightData.error.message);
-
-  // Agrupa valores diários por mês
+  // Agrupa reach diário por mês
   const byMonth = {};
-  for (const metric of (insightData.data || [])) {
+  for (const metric of (reachData.data || [])) {
     for (const val of (metric.values || [])) {
       const d = new Date(val.end_time);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      if (!byMonth[key]) byMonth[key] = { reach: 0, profile_views: 0 };
-      byMonth[key][metric.name] = (byMonth[key][metric.name] || 0) + (val.value || 0);
+      if (!byMonth[key]) byMonth[key] = { reach: 0 };
+      byMonth[key].reach += (val.value || 0);
     }
   }
 
@@ -912,13 +915,21 @@ async function backfillInstagram() {
   `);
   const insertMany = db.transaction((entries) => {
     for (const [month, vals] of entries) {
-      upsert.run(month + '-01', currentFollowers, vals.reach, vals.profile_views);
+      upsert.run(month + '-01', currentFollowers, vals.reach, 0);
     }
   });
   const entries = Object.entries(byMonth).sort(([a], [b]) => a.localeCompare(b));
   insertMany(entries);
+  db.pragma('wal_checkpoint(TRUNCATE)');
   console.log(`[backfill IG] ${entries.length} meses importados.`);
 }
+
+// Dispara backfill manualmente (exige JWT)
+app.post('/api/backfill', requireAuth, async (req, res) => {
+  res.json({ message: 'Backfill iniciado em background' });
+  backfillYouTube().catch(e => console.error('[backfill YT]', e.message));
+  backfillInstagram().catch(e => console.error('[backfill IG]', e.message));
+});
 
 // Todas as rotas /api/* exigem autenticação
 app.use('/api', requireAuth, router);
