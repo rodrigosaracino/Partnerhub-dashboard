@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/Card';
 import { Badge } from '../components/Badge';
 import { KpiCard } from '../components/KpiCard';
 import { API, fmt, TOOLTIP_STYLE } from '../utils/format';
-import { Video, Users, Eye, TrendingUp, Clock, MousePointerClick, Zap, Play, ThumbsUp, Upload, AlertCircle, Navigation } from 'lucide-react';
+import { Video, Users, Eye, TrendingUp, Clock, MousePointerClick, Zap, Play, ThumbsUp, Upload, AlertCircle, Navigation, BarChart3 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, ComposedChart, Line, Legend,
