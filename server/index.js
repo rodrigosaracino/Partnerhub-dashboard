@@ -21,8 +21,18 @@ const DB_PATH = path.join(__dirname, 'partnerhub.db');
 
 // ── Banco de Dados ──────────────────────────────────────────
 const db = new Database(DB_PATH);
-db.pragma('journal_mode = DELETE'); // WAL incompatível com Docker bind-mount
+db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+
+// Checkpoint ao encerrar — garante que WAL seja gravado no arquivo principal antes do container parar
+process.on('SIGTERM', () => {
+  try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch {}
+  process.exit(0);
+});
+process.on('SIGINT', () => {
+  try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch {}
+  process.exit(0);
+});
 
 // Inicializar schema
 const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
