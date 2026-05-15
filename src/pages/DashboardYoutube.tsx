@@ -4,130 +4,255 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/Card';
 import { Badge } from '../components/Badge';
 import { KpiCard } from '../components/KpiCard';
 import { API, fmt, TOOLTIP_STYLE } from '../utils/format';
-import { DateRangeFilter, filterByRange, type DateRange } from '../components/DateRangeFilter';
-import { Video, Users, Eye, TrendingUp, BarChart3, Upload, Play, ThumbsUp } from 'lucide-react';
+import { Video, Users, Eye, TrendingUp, Clock, MousePointerClick, Zap, Play, ThumbsUp, Upload, AlertCircle, Navigation } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart, Bar,
+  BarChart, Bar, ComposedChart, Line, Legend,
+  Cell,
 } from 'recharts';
 
-function initRange(): DateRange {
-  const d = new Date();
-  const to = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  const from = `${d.getFullYear()}-01`;
-  return { from, to };
+function fmtDuration(secs: number): string {
+  if (!secs) return '0:00';
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+function GrowthInsight({ label, value, hint, color = 'var(--accent-primary)' }: { label: string; value: string; hint: string; color?: string }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '0.75rem', background: 'rgba(255,255,255,0.03)', borderRadius: 10, borderLeft: `3px solid ${color}` }}>
+      <span style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>{label}</span>
+      <span style={{ fontSize: '1.1rem', fontWeight: 700, color }}>{value}</span>
+      <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)', lineHeight: 1.4 }}>{hint}</span>
+    </div>
+  );
+}
+
+const TRAFFIC_COLORS = ['#EF4444','#f97316','#eab308','#22c55e','#3b82f6','#8b5cf6','#ec4899','#14b8a6'];
+
 export function DashboardYoutube() {
-  const [range, setRange] = useState<DateRange>(initRange());
+  const [months, setMonths] = useState(12);
 
-  const { data: stats } = useSWR(`${API}/channel-stats`);
-  const { data: topVideosData } = useSWR(`${API}/youtube-top-videos`);
-  const { data: monthlyStatsData } = useSWR(`${API}/youtube-monthly-stats`);
-  const { data: uploadFreqData } = useSWR(`${API}/youtube-upload-frequency`);
+  const { data: stats }     = useSWR(`${API}/channel-stats`);
+  const { data: analytics, error: analyticsError } = useSWR(`${API}/youtube-analytics?months=${months}`);
+  const { data: topVideos } = useSWR(`${API}/youtube-top-videos`);
+  const { data: myVideos }  = useSWR(`${API}/my-video-stats`);
 
-  const topVideos = topVideosData || [];
-  const monthlyStats = monthlyStatsData || [];
-  const uploadFreq = uploadFreqData ? [...(uploadFreqData as any[])].reverse() : [];
+  const videos     = parseInt(stats?.videoCount || '0');
+  const subs       = parseInt(stats?.subscriberCount || '0');
+  const totalViews = parseInt(stats?.viewCount || '0');
 
-  // Apply date filter to monthly/upload data
-  const filteredMonthly  = filterByRange(monthlyStats, range);
-  // uploadFreq has key 'month' not 'name', so rename before filtering
-  const uploadFreqNamed  = uploadFreq.map(r => ({ ...r, name: r.month }));
-  const filteredUpload   = filterByRange(uploadFreqNamed, range);
+  const summary        = analytics?.summary || {};
+  const monthly: any[] = analytics?.monthly || [];
+  const traffic: any[] = analytics?.trafficSources || [];
 
-  const subscribers      = parseInt(stats?.subscriberCount || '0');
-  const views            = parseInt(stats?.viewCount || '0');
-  const videos           = parseInt(stats?.videoCount || '1');
-  const avgViewsPerVideo = videos > 0 ? Math.round(views / videos) : 0;
+  const notAuthorized = analyticsError || analytics?.error;
 
-  const totalUploads  = filteredUpload.reduce((s, r) => s + (r.count || 0), 0);
-  const avgPerMonth   = filteredUpload.length > 0 ? (totalUploads / filteredUpload.length).toFixed(1) : '0';
-  const topViewCount  = topVideos[0]?.views || 0;
+  // Growth rate: subs gained vs lost
+  const netSubs   = (summary.subsGained || 0) - (summary.subsLost || 0);
+  const retentionPct = summary.avgViewDuration && myVideos?.length
+    ? (() => {
+        const avgDurSecs = myVideos.reduce((s: number, v: any) => {
+          const m = (v.duration || '').match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+          if (!m) return s;
+          return s + parseInt(m[1]||'0')*3600 + parseInt(m[2]||'0')*60 + parseInt(m[3]||'0');
+        }, 0) / myVideos.length;
+        return avgDurSecs > 0 ? Math.min(100, Math.round((summary.avgViewDuration / avgDurSecs) * 100)) : null;
+      })()
+    : null;
+
+  // Insights
+  const ctrLevel = summary.ctr >= 6 ? { label: 'Excelente', color: '#4ade80' }
+    : summary.ctr >= 4 ? { label: 'Boa', color: '#facc15' }
+    : summary.ctr > 0  ? { label: 'Baixa', color: '#f87171' }
+    : null;
+
+  const topSource = traffic[0];
 
   return (
     <div className="flex flex-col gap-6 pb-10">
+
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'linear-gradient(135deg, #EF4444 0%, #DC2626 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 20px rgba(239,68,68,0.35)' }}>
+          <div style={{ width: 52, height: 52, borderRadius: '50%', background: 'linear-gradient(135deg,#EF4444,#DC2626)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 20px rgba(239,68,68,0.35)' }}>
             <Video size={24} color="#fff" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold">YouTube — Rodrigo Saracino</h1>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Dashboard do Canal · Dados em tempo real</p>
+            <h1 className="text-2xl font-bold">YouTube — Growth Dashboard</h1>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Análise de crescimento · Analytics em tempo real</p>
           </div>
         </div>
-        <Badge variant="neutral">{fmt(videos)} vídeos publicados</Badge>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <span style={{ fontSize: '0.78rem', color: 'var(--text-tertiary)' }}>Período:</span>
+          {[3, 6, 12, 18].map(m => (
+            <button key={m} onClick={() => setMonths(m)} style={{ padding: '0.3rem 0.7rem', borderRadius: 6, fontSize: '0.78rem', fontWeight: months === m ? 700 : 400, background: months === m ? '#EF4444' : 'rgba(255,255,255,0.06)', border: 'none', color: months === m ? 'white' : 'var(--text-secondary)', cursor: 'pointer' }}>
+              {m}m
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Date filter */}
-      <div style={{ padding: '0.75rem 1rem', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '0.75rem' }}>
-        <DateRangeFilter value={range} onChange={setRange} accentColor="#EF4444" />
+      {/* Banner de autorização pendente */}
+      {notAuthorized && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.875rem 1rem', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 10 }}>
+          <AlertCircle size={16} style={{ color: '#fbbf24', flexShrink: 0 }} />
+          <p style={{ fontSize: '0.85rem', color: '#fbbf24' }}>
+            YouTube Analytics não conectado. <a href="/api/auth/youtube" style={{ fontWeight: 700, textDecoration: 'underline' }}>Clique aqui para autorizar</a> e desbloquear CTR, Watch Time, Impressões e Fontes de Tráfego.
+          </p>
+        </div>
+      )}
+
+      {/* KPIs principais */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <KpiCard title="Inscritos"          value={fmt(subs)}                       sub="Total atual"                icon={<Users size={17} />}           accentClass="text-red-400"     />
+        <KpiCard title="Views Totais"       value={fmt(totalViews)}                 sub="Acumulado do canal"         icon={<Eye size={17} />}             accentClass="text-blue-400"    />
+        <KpiCard title="Vídeos"             value={fmt(videos)}                     sub="Publicados no canal"        icon={<Video size={17} />}           accentClass="text-emerald-400" />
+        <KpiCard title="Média Views/Vídeo"  value={fmt(Math.round(totalViews / Math.max(1, videos)))} sub="Desempenho médio histórico" icon={<BarChart3 size={17} />} accentClass="text-amber-400"  />
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-        <KpiCard title="Inscritos"              value={fmt(subscribers)}      sub="Total atual"            icon={<Users size={17} />}    accentClass="text-red-400"     />
-        <KpiCard title="Visualizações Totais"   value={fmt(views)}            sub="Acumulado do canal"     icon={<Eye size={17} />}      accentClass="text-blue-400"    />
-        <KpiCard title="Vídeos Publicados"      value={fmt(videos)}           sub="No canal"               icon={<Video size={17} />}    accentClass="text-emerald-400" />
-        <KpiCard title="Média de Views/Vídeo"   value={fmt(avgViewsPerVideo)} sub="Desempenho médio"       icon={<BarChart3 size={17} />} accentClass="text-amber-400"  />
-        <KpiCard title="Uploads por Mês"        value={avgPerMonth}           sub="No período selecionado" icon={<Upload size={17} />}   accentClass="text-indigo-400"  />
-        <KpiCard title="Vídeo Mais Visto"       value={fmt(topViewCount)}     sub={topVideos[0]?.title?.slice(0, 28) + '…' || '—'} icon={<TrendingUp size={17} />} accentClass="text-pink-400" />
-      </div>
+      {/* KPIs Analytics (requerem autorização) */}
+      {!notAuthorized && (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+          <KpiCard title="Impressões"        value={fmt(summary.impressions)}                  sub={`Últimos ${months} meses`}   icon={<Eye size={17} />}              accentClass="text-purple-400"  />
+          <KpiCard title="CTR"               value={summary.ctr ? summary.ctr + '%' : '—'}    sub="Taxa de clique no thumb"     icon={<MousePointerClick size={17} />} accentClass="text-pink-400"    />
+          <KpiCard title="Horas Assistidas"  value={fmt(summary.watchTimeHours) + 'h'}         sub={`Últimos ${months} meses`}   icon={<Clock size={17} />}            accentClass="text-cyan-400"    />
+          <KpiCard title="Duração Média"     value={fmtDuration(summary.avgViewDuration || 0)} sub="Por visualização"            icon={<Play size={17} />}             accentClass="text-indigo-400"  />
+          <KpiCard title="Inscritos Ganhos"  value={fmt(summary.subsGained)}                   sub={`Últimos ${months} meses`}   icon={<TrendingUp size={17} />}       accentClass="text-green-400"   />
+          <KpiCard title="Inscritos Perdidos"value={fmt(summary.subsLost)}                     sub={`Últimos ${months} meses`}   icon={<Upload size={17} />}           accentClass="text-orange-400"  />
+        </div>
+      )}
 
-      {/* Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card className="glass-panel">
-          <CardHeader><CardTitle>Crescimento de Inscritos por Mês</CardTitle></CardHeader>
-          <CardContent style={{ height: '260px' }}>
-            {filteredMonthly.length > 0 ? (
+      {/* Insights de Growth */}
+      {!notAuthorized && summary.ctr > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {ctrLevel && (
+            <GrowthInsight
+              label="CTR do Canal"
+              value={`${summary.ctr}% — ${ctrLevel.label}`}
+              hint={summary.ctr >= 6 ? 'Seus thumbnails e títulos estão atraindo cliques acima da média. Mantenha o padrão visual.'
+                : summary.ctr >= 4 ? 'CTR na média. Teste variações de thumbnail e título para melhorar.'
+                : 'CTR baixo. Priorize testes de thumbnail e reformule os títulos com mais gancho.'}
+              color={ctrLevel.color}
+            />
+          )}
+          {retentionPct !== null && (
+            <GrowthInsight
+              label="Retenção Média"
+              value={`${retentionPct}% do vídeo`}
+              hint={retentionPct >= 50 ? 'Retenção forte. O algoritmo prioriza canais com alto watch time percentual.' : retentionPct >= 35 ? 'Retenção razoável. Melhore os primeiros 30 segundos dos vídeos.' : 'Retenção baixa. Revise o ritmo e gancho inicial dos vídeos.'}
+              color={retentionPct >= 50 ? '#4ade80' : retentionPct >= 35 ? '#facc15' : '#f87171'}
+            />
+          )}
+          {netSubs !== 0 && (
+            <GrowthInsight
+              label="Saldo de Inscritos"
+              value={`${netSubs > 0 ? '+' : ''}${fmt(netSubs)}`}
+              hint={netSubs > 0 ? `Ganho líquido de ${fmt(netSubs)} inscritos no período. Canal em crescimento.` : `Perda líquida de ${fmt(Math.abs(netSubs))} inscritos. Analise o conteúdo que gera mais saídas.`}
+              color={netSubs > 0 ? '#4ade80' : '#f87171'}
+            />
+          )}
+          {topSource && (
+            <GrowthInsight
+              label="Principal Fonte de Tráfego"
+              value={topSource.source}
+              hint={`${topSource.pct}% das views vêm de ${topSource.source}. ${topSource.source.includes('Pesquisa') ? 'Otimize títulos e descrições com palavras-chave.' : topSource.source.includes('Sugeridos') ? 'O algoritmo está recomendando seus vídeos. Mantenha consistência.' : 'Diversifique suas fontes de tráfego.'}`}
+              color="#818cf8"
+            />
+          )}
+        </div>
+      )}
+
+      {/* Gráficos Analytics */}
+      {!notAuthorized && monthly.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+          {/* Impressões + CTR */}
+          <Card className="glass-panel">
+            <CardHeader><CardTitle style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Eye size={15} style={{ color: '#EF4444' }} /> Impressões & CTR por Mês</CardTitle></CardHeader>
+            <CardContent style={{ height: '260px' }}>
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={filteredMonthly} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                <ComposedChart data={monthly} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
+                  <XAxis dataKey="name" stroke="var(--text-tertiary)" tick={{ fontSize: 10 }} />
+                  <YAxis yAxisId="left" stroke="var(--text-tertiary)" tick={{ fontSize: 10 }} />
+                  <YAxis yAxisId="right" orientation="right" stroke="var(--text-tertiary)" tick={{ fontSize: 10 }} unit="%" />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any, name: string) => name === 'CTR (%)' ? `${v}%` : fmt(v)} />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="impressions" fill="#EF4444" fillOpacity={0.6} name="Impressões" radius={[3,3,0,0]} />
+                  <Line yAxisId="right" type="monotone" dataKey="ctr" stroke="#facc15" strokeWidth={2} dot={false} name="CTR (%)" />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
+          {/* Inscritos Ganhos vs Perdidos */}
+          <Card className="glass-panel">
+            <CardHeader><CardTitle style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Users size={15} style={{ color: '#EF4444' }} /> Inscritos Ganhos vs Perdidos</CardTitle></CardHeader>
+            <CardContent style={{ height: '260px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={monthly} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
+                  <XAxis dataKey="name" stroke="var(--text-tertiary)" tick={{ fontSize: 10 }} />
+                  <YAxis stroke="var(--text-tertiary)" tick={{ fontSize: 10 }} />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} />
+                  <Legend />
+                  <Bar dataKey="subsGained" fill="#4ade80" name="Ganhos" radius={[3,3,0,0]} />
+                  <Bar dataKey="subsLost"   fill="#f87171" name="Perdidos" radius={[3,3,0,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
+          {/* Views + Watch Time */}
+          <Card className="glass-panel">
+            <CardHeader><CardTitle style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Clock size={15} style={{ color: '#EF4444' }} /> Views & Horas Assistidas</CardTitle></CardHeader>
+            <CardContent style={{ height: '260px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={monthly} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
                   <defs>
-                    <linearGradient id="ytSub" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%"  stopColor="#EF4444" stopOpacity={0.7} />
+                    <linearGradient id="gradViews" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%"  stopColor="#EF4444" stopOpacity={0.5} />
                       <stop offset="95%" stopColor="#EF4444" stopOpacity={0}   />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
-                  <XAxis dataKey="name" stroke="var(--text-tertiary)" tick={{ fontSize: 11 }} />
-                  <YAxis stroke="var(--text-tertiary)" tick={{ fontSize: 10 }} domain={['dataMin - 20', 'dataMax + 20']} />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} />
-                  <Area type="monotone" dataKey="inscritos" stroke="#EF4444" fill="url(#ytSub)" strokeWidth={2} name="Inscritos" />
-                </AreaChart>
-              </ResponsiveContainer>
-            ) : (
-              <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontSize: '0.875rem', textAlign: 'center' }}>
-                Nenhum dado para o período selecionado.
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="glass-panel">
-          <CardHeader><CardTitle>Frequência de Upload por Mês</CardTitle></CardHeader>
-          <CardContent style={{ height: '260px' }}>
-            {filteredUpload.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={filteredUpload} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
                   <XAxis dataKey="name" stroke="var(--text-tertiary)" tick={{ fontSize: 10 }} />
-                  <YAxis stroke="var(--text-tertiary)" allowDecimals={false} tick={{ fontSize: 10 }} />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} />
-                  <Bar dataKey="count" fill="#EF4444" name="Vídeos" radius={[4,4,0,0]} />
-                </BarChart>
+                  <YAxis yAxisId="left" stroke="var(--text-tertiary)" tick={{ fontSize: 10 }} />
+                  <YAxis yAxisId="right" orientation="right" stroke="var(--text-tertiary)" tick={{ fontSize: 10 }} />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any, name: string) => name === 'Horas Assistidas' ? `${fmt(v)}h` : fmt(v)} />
+                  <Legend />
+                  <Area yAxisId="left" type="monotone" dataKey="views" stroke="#EF4444" fill="url(#gradViews)" strokeWidth={2} name="Views" />
+                  <Line  yAxisId="right" type="monotone" dataKey="watchTimeHours" stroke="#818cf8" strokeWidth={2} dot={false} name="Horas Assistidas" />
+                </ComposedChart>
               </ResponsiveContainer>
-            ) : (
-              <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                Nenhum dado para o período selecionado.
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+            </CardContent>
+          </Card>
 
-      {/* Top 10 Videos */}
+          {/* Fontes de Tráfego */}
+          {traffic.length > 0 && (
+            <Card className="glass-panel">
+              <CardHeader><CardTitle style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Navigation size={15} style={{ color: '#EF4444' }} /> Fontes de Tráfego</CardTitle></CardHeader>
+              <CardContent>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingTop: '0.25rem' }}>
+                  {traffic.slice(0, 7).map((t: any, i: number) => (
+                    <div key={t.source} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', minWidth: 160, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.source}</span>
+                      <div style={{ flex: 1, height: 8, background: 'rgba(255,255,255,0.06)', borderRadius: 4, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${t.pct}%`, background: TRAFFIC_COLORS[i % TRAFFIC_COLORS.length], borderRadius: 4, transition: 'width 0.4s ease' }} />
+                      </div>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 600, minWidth: 40, textAlign: 'right' }}>{t.pct}%</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)', minWidth: 50, textAlign: 'right' }}>{fmt(t.views)}</span>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* Top Vídeos */}
       <Card className="glass-panel">
         <CardHeader>
           <CardTitle style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -135,35 +260,34 @@ export function DashboardYoutube() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {topVideos.length === 0 ? (
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', textAlign: 'center', padding: '1.5rem 0' }}>
-              Sincronize os vídeos primeiro.
-            </p>
+          {!topVideos?.length ? (
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', textAlign: 'center', padding: '1.5rem 0' }}>Sincronize os vídeos primeiro.</p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-              {topVideos.map((v: any, i: number) => {
-                const pct = topViewCount > 0 ? Math.round((v.views / topViewCount) * 100) : 0;
+              {(topVideos as any[]).map((v, i) => {
+                const max = topVideos[0]?.views || 1;
+                const pct = Math.round((v.views / max) * 100);
+                const engRate = v.views > 0 ? ((v.likes / v.views) * 100).toFixed(1) : '0';
                 return (
-                  <div key={v.youtube_id} style={{ display: 'flex', alignItems: 'center', gap: '0.875rem', padding: '0.75rem', borderRadius: '0.625rem', background: 'rgba(255,255,255,0.03)', transition: 'background 0.15s' }}
+                  <div key={v.youtube_id} style={{ display: 'flex', alignItems: 'center', gap: '0.875rem', padding: '0.75rem', borderRadius: '0.625rem', background: 'rgba(255,255,255,0.03)' }}
                     onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)'}
                     onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.03)'}
                   >
-                    <span style={{ fontSize: '0.875rem', fontWeight: 700, width: '1.5rem', textAlign: 'center', color: i === 0 ? '#fbbf24' : i === 1 ? '#cbd5e1' : i === 2 ? '#fb923c' : 'var(--text-secondary)' }}>
-                      {i + 1}
-                    </span>
+                    <span style={{ fontSize: '0.875rem', fontWeight: 700, width: '1.5rem', textAlign: 'center', color: i===0?'#fbbf24':i===1?'#cbd5e1':i===2?'#fb923c':'var(--text-secondary)' }}>{i+1}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{ fontSize: '0.85rem', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: '0.375rem' }}>
+                      <p style={{ fontSize: '0.82rem', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: '0.3rem' }}>
                         {v.title || '(sem título)'}
                       </p>
                       <div className="progress-track">
-                        <div className="progress-fill" style={{ width: `${pct}%`, background: 'linear-gradient(90deg, #EF4444, #f87171)' }} />
+                        <div className="progress-fill" style={{ width: `${pct}%`, background: 'linear-gradient(90deg,#EF4444,#f87171)' }} />
                       </div>
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
                       <p style={{ fontSize: '0.875rem', fontWeight: 700 }}>{fmt(v.views)}</p>
-                      <p style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.25rem', justifyContent: 'flex-end' }}>
-                        <ThumbsUp size={10} /> {fmt(v.likes)}
-                      </p>
+                      <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end', fontSize: '0.65rem', color: 'var(--text-tertiary)' }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}><ThumbsUp size={9} />{fmt(v.likes)}</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}><Zap size={9} />{engRate}%</span>
+                      </div>
                     </div>
                   </div>
                 );

@@ -248,6 +248,81 @@ router.get('/total-impact', (req, res) => {
   } catch (e) { return err(res, e.message); }
 });
 
+// ── YouTube Analytics (Growth) ───────────────────────────────
+router.get('/youtube-analytics', async (req, res) => {
+  try {
+    const refreshToken = process.env.YOUTUBE_ANALYTICS_REFRESH_TOKEN;
+    if (!refreshToken) return err(res, 'YouTube Analytics não autorizado. Acesse /api/auth/youtube', 401);
+
+    const months = parseInt(req.query.months || '12', 10);
+    const authClient = getYtOAuthClient();
+    const ytAnalytics = google.youtubeAnalytics({ version: 'v2', auth: authClient });
+    const ytData      = google.youtube({ version: 'v3', auth: authClient });
+
+    const chRes = await ytData.channels.list({ part: 'id', mine: true });
+    const channelId = chRes.data.items?.[0]?.id;
+    if (!channelId) return err(res, 'Canal não encontrado', 404);
+
+    const endDate   = new Date(); endDate.setDate(1);
+    const startDate = new Date(endDate);
+    startDate.setMonth(startDate.getMonth() - months);
+
+    const sd = startDate.toISOString().split('T')[0];
+    const ed = endDate.toISOString().split('T')[0];
+
+    const [monthlyRes, sourcesRes] = await Promise.allSettled([
+      ytAnalytics.reports.query({
+        ids: `channel==${channelId}`, startDate: sd, endDate: ed, sort: 'month',
+        dimensions: 'month',
+        metrics: 'views,estimatedMinutesWatched,averageViewDuration,subscribersGained,subscribersLost,impressions,impressionsClickThroughRate',
+      }),
+      ytAnalytics.reports.query({
+        ids: `channel==${channelId}`, startDate: sd, endDate: ed, sort: '-views',
+        dimensions: 'insightTrafficSourceType',
+        metrics: 'views',
+      }),
+    ]);
+
+    const SOURCE_LABELS = {
+      YT_SEARCH: 'Pesquisa YouTube', SUGGESTED_VIDEO: 'Vídeos Sugeridos',
+      BROWSE_FEATURES: 'Página Inicial / Navegação', EXTERNAL: 'Sites Externos',
+      NOTIFICATION: 'Notificações', PLAYLIST: 'Playlists',
+      NO_LINK_OTHER_: 'Outros / Direto', SUBSCRIBER: 'Feed de Inscrições',
+      YT_CHANNEL: 'Página do Canal', END_SCREEN: 'Tela Final',
+    };
+
+    const monthly = (monthlyRes.status === 'fulfilled' ? monthlyRes.value.data.rows || [] : []).map(r => ({
+      name:              r[0].slice(0, 7),
+      views:             r[1] || 0,
+      watchTimeHours:    Math.round((r[2] || 0) / 60),
+      avgViewDuration:   Math.round(r[3] || 0),
+      subsGained:        r[4] || 0,
+      subsLost:          r[5] || 0,
+      impressions:       r[6] || 0,
+      ctr:               parseFloat(((r[7] || 0) * 100).toFixed(2)),
+    }));
+
+    const totalViews   = monthly.reduce((s, r) => s + r.views, 0);
+    const trafficRaw   = sourcesRes.status === 'fulfilled' ? sourcesRes.value.data.rows || [] : [];
+    const trafficSources = trafficRaw.map(r => ({
+      source: SOURCE_LABELS[r[0]] || r[0],
+      views:  r[1] || 0,
+      pct:    totalViews > 0 ? parseFloat(((r[1] / totalViews) * 100).toFixed(1)) : 0,
+    })).sort((a, b) => b.views - a.views);
+
+    const summary = {
+      impressions:    monthly.reduce((s, r) => s + r.impressions, 0),
+      ctr:            monthly.length ? parseFloat((monthly.reduce((s, r) => s + r.ctr, 0) / monthly.length).toFixed(2)) : 0,
+      watchTimeHours: monthly.reduce((s, r) => s + r.watchTimeHours, 0),
+      avgViewDuration:monthly.length ? Math.round(monthly.reduce((s, r) => s + r.avgViewDuration, 0) / monthly.length) : 0,
+      subsGained:     monthly.reduce((s, r) => s + r.subsGained, 0),
+      subsLost:       monthly.reduce((s, r) => s + r.subsLost, 0),
+    };
+
+    return ok(res, { summary, monthly, trafficSources });
+  } catch (e) { return err(res, e.message); }
+});
+
 // ── 2. YouTube Top Videos (DB) ───────────────────────────────
 router.get('/youtube-top-videos', (req, res) => {
   try {
