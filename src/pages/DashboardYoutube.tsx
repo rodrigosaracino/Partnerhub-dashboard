@@ -8,7 +8,7 @@ import {
   Zap, Play, ThumbsUp, Upload, AlertCircle, Navigation, BarChart3,
 } from 'lucide-react';
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, ComposedChart, Line, Legend,
 } from 'recharts';
 
@@ -41,8 +41,8 @@ export function DashboardYoutube() {
   const { data: myVideos }  = useSWR(`${API}/my-video-stats`);
 
   const totalSubs  = parseInt(stats?.subscriberCount || '0');
-  const totalViews = parseInt(stats?.viewCount || '0');
-  const totalVids  = parseInt(stats?.videoCount || '0');
+  const _totalViews = parseInt(stats?.viewCount || '0');
+  const _totalVids  = parseInt(stats?.videoCount || '0');
 
   const summary:  any    = analytics?.summary  || {};
   const monthly:  any[]  = analytics?.monthly  || [];
@@ -196,7 +196,7 @@ export function DashboardYoutube() {
                   <XAxis dataKey="name" stroke="var(--text-tertiary)" tick={{ fontSize: 10 }} />
                   <YAxis yAxisId="left"  stroke="var(--text-tertiary)" tick={{ fontSize: 10 }} />
                   <YAxis yAxisId="right" orientation="right" stroke="var(--text-tertiary)" tick={{ fontSize: 10 }} />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any, n: string) => n === 'Horas Assistidas' ? `${fmt(v)}h` : fmt(v)} />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any, n: any) => n === 'Horas Assistidas' ? `${fmt(v)}h` : fmt(v)} />
                   <Legend />
                   <Area yAxisId="left"  type="monotone" dataKey="views"         stroke="#EF4444" fill="url(#gradViews)" strokeWidth={2} name="Views" />
                   <Line yAxisId="right" type="monotone" dataKey="watchTimeHours" stroke="#818cf8" strokeWidth={2} dot={false} name="Horas Assistidas" />
@@ -234,7 +234,7 @@ export function DashboardYoutube() {
                     <XAxis dataKey="name" stroke="var(--text-tertiary)" tick={{ fontSize: 10 }} />
                     <YAxis yAxisId="left"  stroke="var(--text-tertiary)" tick={{ fontSize: 10 }} />
                     <YAxis yAxisId="right" orientation="right" stroke="var(--text-tertiary)" tick={{ fontSize: 10 }} unit="%" />
-                    <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any, n: string) => n === 'CTR (%)' ? `${v}%` : fmt(v)} />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any, n: any) => n === 'CTR (%)' ? `${v}%` : fmt(v)} />
                     <Legend />
                     <Bar  yAxisId="left"  dataKey="impressions" fill="#EF4444" fillOpacity={0.6} name="Impressões" radius={[3,3,0,0]} />
                     <Line yAxisId="right" type="monotone" dataKey="ctr" stroke="#facc15" strokeWidth={2} dot={false} name="CTR (%)" />
