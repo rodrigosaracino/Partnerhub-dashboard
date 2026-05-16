@@ -67,6 +67,7 @@ export const painPointsConfig: Record<string, string> = {
 interface Props {
   video: VideoForModal | null;
   onClose: () => void;
+  onTranscribed?: () => void;
 }
 
 const s = {
@@ -120,7 +121,7 @@ const s = {
   },
 };
 
-export function VideoDetailsModal({ video, onClose }: Props) {
+export function VideoDetailsModal({ video, onClose, onTranscribed }: Props) {
   const [transcript, setTranscript] = useState<string | null>(video?.transcript || null);
   const [transcribing, setTranscribing] = useState(false);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
@@ -138,6 +139,7 @@ export function VideoDetailsModal({ video, onClose }: Props) {
       if (!res.ok) throw new Error(data.error || 'Erro na transcrição');
       setTranscript(data.transcript);
       setTranscriptOpen(true);
+      onTranscribed?.();
     } catch (e: any) {
       alert(e.message);
     } finally {

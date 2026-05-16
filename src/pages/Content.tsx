@@ -390,7 +390,12 @@ export function Content() {
         </div>
       </Card>
 
-      <VideoDetailsModal video={selectedVideoForDetails} onClose={() => setSelectedVideoForDetails(null)} />
+      <VideoDetailsModal
+        key={selectedVideoForDetails?.id ?? 'none'}
+        video={selectedVideoForDetails}
+        onClose={() => setSelectedVideoForDetails(null)}
+        onTranscribed={() => mutate(`${API_URL}/videos`)}
+      />
     </div>
   );
 }

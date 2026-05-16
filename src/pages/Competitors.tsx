@@ -68,6 +68,26 @@ type SortKey = 'views' | 'likes' | 'engagementRate' | 'publishedAt';
 // ─── Helpers ──────────────────────────────────────────────────
 const API_BASE = import.meta.env.VITE_API_URL ?? '/api';
 const STORAGE_KEY = 'partnerhub_competitors';
+const TRANSCRIPT_CACHE_KEY = 'partnerhub_competitor_transcripts';
+const TRANSCRIPT_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias
+
+function loadCachedTranscript(videoId: string): string | null {
+  try {
+    const cache = JSON.parse(localStorage.getItem(TRANSCRIPT_CACHE_KEY) || '{}');
+    const entry = cache[videoId];
+    if (!entry) return null;
+    if (Date.now() - new Date(entry.savedAt).getTime() > TRANSCRIPT_TTL_MS) return null;
+    return entry.transcript;
+  } catch { return null; }
+}
+
+function saveCachedTranscript(videoId: string, transcript: string) {
+  try {
+    const cache = JSON.parse(localStorage.getItem(TRANSCRIPT_CACHE_KEY) || '{}');
+    cache[videoId] = { transcript, savedAt: new Date().toISOString() };
+    localStorage.setItem(TRANSCRIPT_CACHE_KEY, JSON.stringify(cache));
+  } catch {}
+}
 
 function fmt(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -183,9 +203,13 @@ function StatBox({ icon, label, value, color }: { icon: ReactNode; label: string
 }
 
 function CompetitorVideoModal({ video, platform, onClose }: { video: VideoItem | null; platform: 'youtube' | 'instagram'; onClose: () => void }) {
-  const [transcript, setTranscript] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<string | null>(() =>
+    video ? loadCachedTranscript(video.id) : null
+  );
   const [transcribing, setTranscribing] = useState(false);
-  const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [transcriptOpen, setTranscriptOpen] = useState(() =>
+    video ? !!loadCachedTranscript(video.id) : false
+  );
 
   const handleTranscribe = async () => {
     if (!video) return;
@@ -201,6 +225,7 @@ function CompetitorVideoModal({ video, platform, onClose }: { video: VideoItem |
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Erro na transcrição');
+      saveCachedTranscript(video.id, data.transcript);
       setTranscript(data.transcript);
       setTranscriptOpen(true);
     } catch (e: any) {
@@ -764,7 +789,7 @@ export function Competitors() {
         </div>
       )}
 
-      <CompetitorVideoModal video={selectedVideo} platform={platformTab} onClose={() => setSelectedVideo(null)} />
+      <CompetitorVideoModal key={selectedVideo?.id ?? 'none'} video={selectedVideo} platform={platformTab} onClose={() => setSelectedVideo(null)} />
     </div>
   );
 }
