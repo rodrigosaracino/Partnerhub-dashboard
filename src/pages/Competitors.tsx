@@ -1,8 +1,9 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Users, Plus, ExternalLink, ThumbsUp, MessageSquare,
   Eye, TrendingUp, RefreshCw, ChevronDown, ChevronUp,
-  Globe, Play, Search, AlertCircle, Loader2, Zap, X, Sparkles,
+  Globe, Play, Search, AlertCircle, Loader2, Zap, X, Sparkles, Mic,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { getToken } from './Login';
@@ -43,6 +44,7 @@ interface VideoItem {
   engagementRate: number;
   duration: string;
   url: string;
+  media_url?: string | null;
 }
 
 interface CompetitorData {
@@ -102,7 +104,7 @@ function saveSaved(list: SavedChannel[]) {
 
 // ─── Sub-components ───────────────────────────────────────────
 
-function VideoCard({ video, platform }: { video: VideoItem, platform: 'youtube' | 'instagram' }) {
+function VideoCard({ video, platform, onVideoClick }: { video: VideoItem; platform: 'youtube' | 'instagram'; onVideoClick: (v: VideoItem) => void }) {
   const engColor = video.engagementRate >= 5
     ? 'var(--success)'
     : video.engagementRate >= 2
@@ -110,7 +112,7 @@ function VideoCard({ video, platform }: { video: VideoItem, platform: 'youtube' 
     : 'var(--text-secondary)';
 
   return (
-    <a href={video.url} target="_blank" rel="noopener noreferrer" className="video-card" title={video.title}>
+    <div className="video-card" style={{ cursor: 'pointer' }} title={video.title} onClick={() => onVideoClick(video)}>
       <div className="video-thumb-wrap">
         <img src={video.thumbnail} alt={video.title} className="video-thumb" loading="lazy" />
         {platform === 'youtube' && video.duration && (
@@ -134,7 +136,7 @@ function VideoCard({ video, platform }: { video: VideoItem, platform: 'youtube' 
           </span>
         </div>
       </div>
-    </a>
+    </div>
   );
 }
 
@@ -168,6 +170,180 @@ function ChannelRow({
   );
 }
 
+function StatBox({ icon, label, value, color }: { icon: ReactNode; label: string; value: string; color: string }) {
+  return (
+    <div style={{ background: 'rgba(255,255,255,0.04)', padding: '0.625rem 0.75rem', borderRadius: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+      <div style={{ color, opacity: 0.9 }}>{icon}</div>
+      <div>
+        <div style={{ fontSize: '0.6rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</div>
+        <div style={{ fontSize: '0.95rem', fontWeight: 700 }}>{value}</div>
+      </div>
+    </div>
+  );
+}
+
+function CompetitorVideoModal({ video, platform, onClose }: { video: VideoItem | null; platform: 'youtube' | 'instagram'; onClose: () => void }) {
+  const [transcript, setTranscript] = useState<string | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
+
+  const handleTranscribe = async () => {
+    if (!video) return;
+    setTranscribing(true);
+    try {
+      const body = platform === 'instagram'
+        ? { platform: 'instagram', media_url: video.media_url }
+        : { platform: 'youtube', youtube_id: video.id };
+      const res = await authFetch(`${API_BASE}/transcribe-competitor-video`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro na transcrição');
+      setTranscript(data.transcript);
+      setTranscriptOpen(true);
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
+  if (!video) return null;
+
+  const engColor = video.engagementRate >= 5
+    ? 'var(--success)'
+    : video.engagementRate >= 2
+    ? 'var(--warning)'
+    : 'var(--text-secondary)';
+
+  const isInstagram = platform === 'instagram';
+  const linkStyle = isInstagram
+    ? { background: 'rgba(168,85,247,0.12)', border: '1px solid rgba(168,85,247,0.3)', color: '#c084fc' }
+    : { background: 'rgba(255,0,0,0.12)', border: '1px solid rgba(255,0,0,0.25)', color: '#ff6b6b' };
+
+  return createPortal(
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}
+      onClick={onClose}
+    >
+      <div
+        style={{ backgroundColor: '#0f0f11', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '1.25rem', width: '100%', maxWidth: '860px', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 30px 80px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.04)', position: 'relative', padding: '1.75rem', display: 'flex', gap: '2rem' }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Close */}
+        <button
+          style={{ position: 'absolute', top: '1rem', right: '1rem', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '0.5rem', cursor: 'pointer', color: 'var(--text-secondary)', padding: '0.375rem', display: 'flex', transition: 'all 0.2s' }}
+          onClick={onClose}
+        >
+          <X size={18} />
+        </button>
+
+        {/* Left: thumbnail + link */}
+        <div style={{ flex: '0 0 320px', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <div style={{ position: 'relative', borderRadius: '0.875rem', overflow: 'hidden', background: '#1a1a1e', aspectRatio: '16/9', border: '1px solid rgba(255,255,255,0.08)' }}>
+            <img src={video.thumbnail} alt={video.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            {platform === 'youtube' && video.duration && (
+              <span style={{ position: 'absolute', bottom: '0.5rem', right: '0.5rem', background: 'rgba(0,0,0,0.85)', color: '#fff', fontSize: '0.75rem', fontWeight: 600, padding: '0.2rem 0.45rem', borderRadius: '0.25rem' }}>
+                {parseDuration(video.duration)}
+              </span>
+            )}
+          </div>
+          <a
+            href={video.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '0.625rem 1rem', borderRadius: '0.625rem', fontSize: '0.85rem', textDecoration: 'none', fontWeight: 600, transition: 'opacity 0.2s', ...linkStyle }}
+            onClick={e => e.stopPropagation()}
+          >
+            <ExternalLink size={14} /> Assistir no {isInstagram ? 'Instagram' : 'YouTube'}
+          </a>
+        </div>
+
+        {/* Right: details */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: 0, paddingRight: '2rem' }}>
+          <div>
+            <h2 style={{ fontSize: '1.1rem', fontWeight: 700, lineHeight: 1.4, marginBottom: '0.5rem' }}>{video.title}</h2>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              {new Date(video.publishedAt).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}
+              {' · '}
+              {relativeDate(video.publishedAt)}
+            </p>
+          </div>
+
+          <div style={{ height: '1px', background: 'rgba(255,255,255,0.06)' }} />
+
+          <div>
+            <p style={{ fontSize: '0.6rem', textTransform: 'uppercase' as const, letterSpacing: '0.12em', color: 'var(--text-secondary)', fontWeight: 700, marginBottom: '0.75rem' }}>
+              Métricas de Performance
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.625rem' }}>
+              {platform === 'youtube' && (
+                <StatBox icon={<Eye size={14} />} label="Visualizações" value={fmt(video.views)} color="#60a5fa" />
+              )}
+              <StatBox icon={<ThumbsUp size={14} />} label="Curtidas" value={fmt(video.likes)} color="#10b981" />
+              <StatBox icon={<MessageSquare size={14} />} label="Comentários" value={fmt(video.comments)} color="#f59e0b" />
+              <StatBox icon={<Zap size={14} />} label="Engajamento" value={`${video.engagementRate.toFixed(1)}%`} color={engColor} />
+            </div>
+          </div>
+
+          {/* Transcription — YouTube + Instagram VIDEO */}
+          {(platform === 'youtube' || video.duration === 'VIDEO') && (
+            <>
+              <div style={{ height: '1px', background: 'rgba(255,255,255,0.06)' }} />
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: transcript ? '0.5rem' : 0 }}>
+                  <p style={{ fontSize: '0.6rem', textTransform: 'uppercase' as const, letterSpacing: '0.12em', color: 'var(--text-secondary)', fontWeight: 700 }}>Transcrição</p>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    {transcript && (
+                      <button
+                        onClick={() => setTranscriptOpen(o => !o)}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.75rem' }}
+                      >
+                        {transcriptOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        {transcriptOpen ? 'Recolher' : 'Expandir'}
+                      </button>
+                    )}
+                    {!transcript && (
+                      <button
+                        onClick={handleTranscribe}
+                        disabled={transcribing}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.4)', borderRadius: '0.375rem', color: '#818cf8', fontSize: '0.8rem', fontWeight: 600, padding: '0.3rem 0.75rem', cursor: transcribing ? 'not-allowed' : 'pointer', opacity: transcribing ? 0.7 : 1 }}
+                      >
+                        {transcribing ? <Loader2 size={13} className="spin" /> : <Mic size={13} />}
+                        {transcribing ? 'Transcrevendo...' : 'Transcrever com Gemini'}
+                      </button>
+                    )}
+                    {transcript && !transcribing && (
+                      <button
+                        onClick={handleTranscribe}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.7rem' }}
+                        title="Retranscrever"
+                      >
+                        <Mic size={12} /> Refazer
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {transcript && transcriptOpen && (
+                  <div style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.03)', borderRadius: '0.625rem', border: '1px solid rgba(255,255,255,0.06)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.7, maxHeight: '200px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
+                    {transcript}
+                  </div>
+                )}
+                {transcript && !transcriptOpen && (
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>Transcrição disponível — clique em Expandir para ver.</p>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────
 export function Competitors() {
   const [savedChannels, setSavedChannels] = useState<SavedChannel[]>(loadSaved);
@@ -189,6 +365,9 @@ export function Competitors() {
   // Filters
   const [sortKey, setSortKey] = useState<SortKey>('views');
   const [searchFilter, setSearchFilter] = useState('');
+
+  // Selected video modal
+  const [selectedVideo, setSelectedVideo] = useState<VideoItem | null>(null);
 
   // ── Fetch channel data ──────────────────────────────────────
   const fetchChannel = useCallback(async (channelInput: string, platform: 'youtube' | 'instagram', channelId?: string) => {
@@ -567,7 +746,7 @@ export function Competitors() {
                       ) : (
                         <div className="comp-videos-grid">
                           {filteredVideos.map((video: any) => (
-                            <VideoCard key={video.id} video={video} platform={platformTab} />
+                            <VideoCard key={video.id} video={video} platform={platformTab} onVideoClick={setSelectedVideo} />
                           ))}
                         </div>
                       )}
@@ -583,6 +762,8 @@ export function Competitors() {
           ))}
         </div>
       )}
+
+      <CompetitorVideoModal video={selectedVideo} platform={platformTab} onClose={() => setSelectedVideo(null)} />
     </div>
   );
 }

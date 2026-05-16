@@ -1,7 +1,15 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, ExternalLink, Eye, ThumbsUp, AlertCircle, Video as VideoIcon } from 'lucide-react';
+import { X, ExternalLink, Eye, ThumbsUp, AlertCircle, Video as VideoIcon, Mic, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { Badge } from './Badge';
+import { getToken } from '../pages/Login';
+
+const API_BASE = (import.meta as any).env?.VITE_API_URL ?? '/api';
+
+function authFetch(url: string, options: RequestInit = {}) {
+  const token = getToken();
+  return fetch(url, { ...options, headers: { ...(options.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
+}
 
 // ─── Types (re-exported for use in Content.tsx) ───────────────────────────────
 export type VideoStatus = 'draft' | 'scripting' | 'recording' | 'editing' | 'published';
@@ -22,6 +30,7 @@ export interface VideoForModal {
   problem_solved?: string;
   views: number;
   likes: number;
+  transcript?: string;
 }
 
 // ─── Shared Configs ──────────────────────────────────────────────────────────
@@ -112,6 +121,30 @@ const s = {
 };
 
 export function VideoDetailsModal({ video, onClose }: Props) {
+  const [transcript, setTranscript] = useState<string | null>(video?.transcript || null);
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
+
+  const handleTranscribe = async () => {
+    if (!video?.youtube_id) return;
+    setTranscribing(true);
+    try {
+      const res = await authFetch(`${API_BASE}/transcribe-video`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ youtube_id: video.youtube_id, video_id: video.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro na transcrição');
+      setTranscript(data.transcript);
+      setTranscriptOpen(true);
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
   if (!video) return null;
 
   return createPortal(
@@ -248,6 +281,57 @@ export function VideoDetailsModal({ video, onClose }: Props) {
               )}
             </div>
           </div>
+
+          {/* Transcription */}
+          {video.youtube_id && (
+            <>
+              <div style={s.divider} />
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: transcript ? '0.5rem' : 0 }}>
+                  <p style={s.label}>Transcrição</p>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    {transcript && (
+                      <button
+                        onClick={() => setTranscriptOpen(o => !o)}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.75rem' }}
+                      >
+                        {transcriptOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        {transcriptOpen ? 'Recolher' : 'Expandir'}
+                      </button>
+                    )}
+                    {!transcript && (
+                      <button
+                        onClick={handleTranscribe}
+                        disabled={transcribing}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.4)', borderRadius: '0.375rem', color: '#818cf8', fontSize: '0.8rem', fontWeight: 600, padding: '0.3rem 0.75rem', cursor: transcribing ? 'not-allowed' : 'pointer', opacity: transcribing ? 0.7 : 1 }}
+                      >
+                        {transcribing ? <Loader2 size={13} className="spin" /> : <Mic size={13} />}
+                        {transcribing ? 'Transcrevendo...' : 'Transcrever com Gemini'}
+                      </button>
+                    )}
+                    {transcript && !transcribing && (
+                      <button
+                        onClick={handleTranscribe}
+                        disabled={transcribing}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.7rem' }}
+                        title="Retranscrever"
+                      >
+                        <Mic size={12} /> Refazer
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {transcript && transcriptOpen && (
+                  <div style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.03)', borderRadius: '0.625rem', border: '1px solid rgba(255,255,255,0.06)', fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.7, maxHeight: '200px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
+                    {transcript}
+                  </div>
+                )}
+                {transcript && !transcriptOpen && (
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>Transcrição disponível — clique em Expandir para ver.</p>
+                )}
+              </div>
+            </>
+          )}
 
         </div>
       </div>

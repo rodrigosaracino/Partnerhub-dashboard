@@ -38,6 +38,13 @@ process.on('SIGINT', () => {
 const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
 db.exec(schema);
 
+// Migrações incrementais — colunas que podem não existir em DBs antigos
+for (const m of [
+  'ALTER TABLE videos ADD COLUMN transcript TEXT',
+]) {
+  try { db.exec(m); } catch {}
+}
+
 
 // ── Express ─────────────────────────────────────────────────
 const app = express();
@@ -756,13 +763,13 @@ router.get('/instagram-competitor', async (req, res) => {
           title: m.caption || '(Sem legenda)',
           publishedAt: m.timestamp,
           thumbnail: m.media_type === 'VIDEO' ? (m.thumbnail_url || m.media_url) : m.media_url,
-
           views: 0,
           likes,
           comments,
           engagementRate: parseFloat(engRate.toFixed(2)),
           duration: m.media_type,
           url: m.permalink,
+          media_url: m.media_type === 'VIDEO' ? (m.media_url || null) : null,
         };
       });
     }
@@ -814,6 +821,69 @@ Responda em um formato de Markdown limpo e fácil de ler, usando negrito para de
     const text = response.text();
 
     return ok(res, { analysis: text });
+  } catch (e) { return err(res, e.message); }
+});
+
+// ── 9.3 Transcrição de vídeo próprio (Content tab) ────────────
+router.post('/transcribe-video', async (req, res) => {
+  try {
+    const { youtube_id, video_id } = req.body || {};
+    if (!youtube_id) return err(res, 'youtube_id é obrigatório', 400);
+    if (!process.env.GEMINI_API_KEY) return err(res, 'GEMINI_API_KEY não configurada', 500);
+
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
+    const result = await model.generateContent([
+      { fileData: { mimeType: 'video/mp4', fileUri: `https://www.youtube.com/watch?v=${youtube_id}` } },
+      'Transcreva fielmente todo o áudio/fala deste vídeo em português. Inclua apenas o texto transcrito, sem timestamps ou metadados. Se o vídeo estiver em outro idioma, transcreva e depois traduza para o português.',
+    ]);
+
+    const transcript = result.response.text();
+
+    if (video_id) {
+      db.prepare('UPDATE videos SET transcript = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(transcript, video_id);
+    }
+
+    return ok(res, { transcript });
+  } catch (e) { return err(res, e.message); }
+});
+
+// ── 9.4 Transcrição de vídeo de concorrente ───────────────────
+router.post('/transcribe-competitor-video', async (req, res) => {
+  try {
+    const { platform, youtube_id, media_id } = req.body || {};
+    if (!process.env.GEMINI_API_KEY) return err(res, 'GEMINI_API_KEY não configurada', 500);
+
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const prompt = 'Transcreva fielmente todo o áudio/fala deste vídeo em português. Inclua apenas o texto transcrito, sem timestamps ou metadados. Se o vídeo estiver em outro idioma, transcreva e depois traduza para o português.';
+
+    if (platform === 'instagram') {
+      const { media_url } = req.body || {};
+      if (!media_url) return err(res, 'URL do vídeo não disponível para este post', 400);
+
+      // Baixa o vídeo e envia como inline data ao Gemini
+      const videoResp = await fetch(media_url);
+      if (!videoResp.ok) return err(res, 'Erro ao baixar o vídeo do Instagram', 500);
+      const arrayBuf = await videoResp.arrayBuffer();
+      const videoBuffer = Buffer.from(arrayBuf);
+      if (videoBuffer.length > 20 * 1024 * 1024) return err(res, 'Vídeo muito grande para transcrição (limite 20MB)', 400);
+
+      const result = await model.generateContent([
+        { inlineData: { mimeType: 'video/mp4', data: videoBuffer.toString('base64') } },
+        prompt,
+      ]);
+      return ok(res, { transcript: result.response.text() });
+    }
+
+    // YouTube
+    if (!youtube_id) return err(res, 'youtube_id é obrigatório para YouTube', 400);
+    const result = await model.generateContent([
+      { fileData: { mimeType: 'video/mp4', fileUri: `https://www.youtube.com/watch?v=${youtube_id}` } },
+      prompt,
+    ]);
+    return ok(res, { transcript: result.response.text() });
   } catch (e) { return err(res, e.message); }
 });
 
