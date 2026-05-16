@@ -118,7 +118,6 @@ function VideoCard({ video, platform }: { video: VideoItem, platform: 'youtube' 
     setTranscribing(true);
     setTranscriptError(null);
     try {
-      const token = getToken();
       const body = platform === 'youtube'
         ? { platform: 'youtube', youtube_id: video.id }
         : { platform: 'instagram', media_url: video.media_url };
