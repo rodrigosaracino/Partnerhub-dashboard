@@ -9,8 +9,7 @@ import {
   type VideoStatus, type VideoPillar, type JourneyStage, type VideoForModal,
 } from '../components/VideoDetailsModal';
 import { API } from '../utils/format';
-import { getToken } from './Login';
-import { Plus, Trash2, RefreshCw, Eye, ThumbsUp, Save, Edit2, AlertCircle, FileText, Loader2 } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Eye, ThumbsUp, Save, Edit2, AlertCircle } from 'lucide-react';
 
 type Video = VideoForModal;
 
@@ -24,28 +23,6 @@ export function Content() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedVideoForDetails, setSelectedVideoForDetails] = useState<Video | null>(null);
   const [syncing, setSyncing] = useState(false);
-  const [transcribingId, setTranscribingId] = useState<string | null>(null);
-
-  const handleTranscribe = async (video: Video) => {
-    if (!video.youtube_id || transcribingId) return;
-    setTranscribingId(video.id);
-    try {
-      const token = getToken();
-      const res = await fetch(`${API_URL}/transcribe-video`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ youtube_id: video.youtube_id, video_id: video.id }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Erro ao transcrever');
-      await mutate(`${API_URL}/videos`);
-      alert('Transcrição concluída e salva!');
-    } catch (e: any) {
-      alert(`Erro: ${e.message}`);
-    } finally {
-      setTranscribingId(null);
-    }
-  };
   
   // Form states
   const [newTitle, setNewTitle] = useState('');
@@ -394,20 +371,6 @@ export function Content() {
                     </td>
                     <td className="p-4 text-right" onClick={e => e.stopPropagation()}>
                       <div className="flex justify-end gap-1">
-                        {video.youtube_id && (
-                          <Button
-                            variant="ghost"
-                            className="p-2 text-muted hover:text-blue-400"
-                            title={video.transcript ? 'Retranscrever com Gemini' : 'Transcrever com Gemini'}
-                            onClick={() => handleTranscribe(video)}
-                            disabled={transcribingId === video.id}
-                          >
-                            {transcribingId === video.id
-                              ? <Loader2 size={16} className="animate-spin" />
-                              : <FileText size={16} className={video.transcript ? 'text-blue-400' : ''} />
-                            }
-                          </Button>
-                        )}
                         <Button variant="ghost" className="p-2 text-muted hover:text-[var(--accent-primary)]" title="Ver Detalhes" onClick={() => setSelectedVideoForDetails(video)}>
                           <Eye size={16} />
                         </Button>
