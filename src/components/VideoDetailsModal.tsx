@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, ExternalLink, Eye, ThumbsUp, AlertCircle, Video as VideoIcon } from 'lucide-react';
+import { X, ExternalLink, Eye, ThumbsUp, AlertCircle, Video as VideoIcon, FileText, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { Badge } from './Badge';
+import { getToken } from '../pages/Login';
+import { API } from '../utils/format';
 
 // ─── Types (re-exported for use in Content.tsx) ───────────────────────────────
 export type VideoStatus = 'draft' | 'scripting' | 'recording' | 'editing' | 'published';
@@ -20,6 +22,7 @@ export interface VideoForModal {
   persona?: string;
   pain_point?: string;
   problem_solved?: string;
+  transcript?: string;
   views: number;
   likes: number;
 }
@@ -112,6 +115,35 @@ const s = {
 };
 
 export function VideoDetailsModal({ video, onClose }: Props) {
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcript, setTranscript] = useState<string | null>(null);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+
+  const currentTranscript = transcript ?? video?.transcript ?? null;
+
+  const handleTranscribe = async () => {
+    if (!video?.youtube_id) return;
+    setTranscribing(true);
+    setTranscriptError(null);
+    try {
+      const token = getToken();
+      const res = await fetch(`${API}/transcribe-video`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ youtube_id: video.youtube_id, video_id: video.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro ao transcrever');
+      setTranscript(data.transcript);
+      setTranscriptExpanded(true);
+    } catch (e: any) {
+      setTranscriptError(e.message);
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
   if (!video) return null;
 
   return createPortal(
@@ -248,6 +280,64 @@ export function VideoDetailsModal({ video, onClose }: Props) {
               )}
             </div>
           </div>
+
+          <div style={s.divider} />
+
+          {/* Transcrição */}
+          {video.youtube_id && (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                <p style={s.label}>Transcrição do Vídeo</p>
+                <button
+                  onClick={handleTranscribe}
+                  disabled={transcribing}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '0.375rem',
+                    padding: '0.3rem 0.75rem', borderRadius: '0.5rem', fontSize: '0.75rem', fontWeight: 600,
+                    background: transcribing ? 'rgba(255,255,255,0.05)' : 'rgba(66, 133, 244, 0.12)',
+                    border: '1px solid rgba(66, 133, 244, 0.3)', color: transcribing ? 'var(--text-secondary)' : '#60a5fa',
+                    cursor: transcribing ? 'not-allowed' : 'pointer', transition: 'all 0.2s',
+                  }}
+                >
+                  {transcribing
+                    ? <><Loader2 size={12} className="animate-spin" /> Transcrevendo...</>
+                    : <><FileText size={12} /> {currentTranscript ? 'Retranscrever' : 'Transcrever com Gemini'}</>
+                  }
+                </button>
+              </div>
+
+              {transcriptError && (
+                <div style={{ padding: '0.625rem', borderRadius: '0.5rem', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171', fontSize: '0.78rem' }}>
+                  {transcriptError}
+                </div>
+              )}
+
+              {currentTranscript ? (
+                <div>
+                  <button
+                    onClick={() => setTranscriptExpanded(e => !e)}
+                    style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', width: '100%', padding: '0.5rem 0.75rem', borderRadius: '0.5rem 0.5rem 0 0', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)', color: 'var(--text-secondary)', fontSize: '0.78rem', cursor: 'pointer', justifyContent: 'space-between' }}
+                  >
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                      <FileText size={12} /> Transcrição disponível ({currentTranscript.length} chars)
+                    </span>
+                    {transcriptExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                  </button>
+                  {transcriptExpanded && (
+                    <div style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)', borderTop: 'none', borderRadius: '0 0 0.5rem 0.5rem', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.7, maxHeight: '200px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
+                      {currentTranscript}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                !transcribing && (
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                    Nenhuma transcrição gerada ainda. Clique em "Transcrever com Gemini" para criar.
+                  </p>
+                )
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>,

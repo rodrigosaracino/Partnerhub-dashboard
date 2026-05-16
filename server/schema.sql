@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS videos (
   persona TEXT,
   pain_point TEXT,
   problem_solved TEXT,
+  transcript TEXT,
   views INTEGER DEFAULT 0,
   likes INTEGER DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

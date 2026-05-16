@@ -38,6 +38,14 @@ process.on('SIGINT', () => {
 const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
 db.exec(schema);
 
+// Migração incremental: adiciona colunas que podem não existir em DBs antigos
+const migrations = [
+  "ALTER TABLE videos ADD COLUMN transcript TEXT",
+];
+for (const m of migrations) {
+  try { db.exec(m); } catch {}
+}
+
 // ── Express ─────────────────────────────────────────────────
 const app = express();
 app.use(cors());
@@ -812,6 +820,37 @@ Responda em um formato de Markdown limpo e fácil de ler, usando negrito para de
     const text = response.text();
 
     return ok(res, { analysis: text });
+  } catch (e) { return err(res, e.message); }
+});
+
+// ── 9.3 AI Video Transcription (Google Gemini) ──────────────────
+router.post('/transcribe-video', async (req, res) => {
+  try {
+    const { youtube_id, video_id } = req.body;
+
+    if (!youtube_id) return err(res, 'youtube_id é obrigatório', 400);
+    if (!process.env.GEMINI_API_KEY) return err(res, 'GEMINI_API_KEY não configurada', 400);
+
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+
+    const result = await model.generateContent([
+      {
+        fileData: {
+          mimeType: 'video/mp4',
+          fileUri: `https://www.youtube.com/watch?v=${youtube_id}`,
+        },
+      },
+      'Transcreva fielmente todo o áudio/fala deste vídeo em português. Inclua apenas o texto transcrito, sem timestamps ou metadados. Se o vídeo estiver em outro idioma, transcreva e depois traduza para o português.',
+    ]);
+
+    const transcript = result.response.text();
+
+    if (video_id) {
+      db.prepare('UPDATE videos SET transcript = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(transcript, video_id);
+    }
+
+    return ok(res, { transcript });
   } catch (e) { return err(res, e.message); }
 });
 
