@@ -144,7 +144,7 @@ function VideoCard({ video, platform }: { video: VideoItem, platform: 'youtube' 
     : 'var(--text-secondary)';
 
   return (
-    <div className="video-card" style={{ cursor: 'default' }}>
+    <div className="video-card" style={{ cursor: 'default', overflow: 'visible' }}>
       {/* Thumbnail — clicável */}
       <a href={video.url} target="_blank" rel="noopener noreferrer" className="video-thumb-wrap" title={video.title}>
         <img src={video.thumbnail} alt={video.title} className="video-thumb" loading="lazy" />
@@ -176,13 +176,13 @@ function VideoCard({ video, platform }: { video: VideoItem, platform: 'youtube' 
 
         {/* Botão de transcrição */}
         {canTranscribe && (
-          <div style={{ marginTop: '0.5rem' }}>
+          <div style={{ paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
             <button
               onClick={handleTranscribe}
               disabled={transcribing}
               style={{
                 display: 'flex', alignItems: 'center', gap: '0.3rem',
-                padding: '0.25rem 0.6rem', borderRadius: '0.375rem',
+                padding: '0.3rem 0.6rem', borderRadius: '0.375rem',
                 fontSize: '0.7rem', fontWeight: 600, width: '100%', justifyContent: 'center',
                 background: transcribing ? 'rgba(255,255,255,0.04)' : 'rgba(66,133,244,0.1)',
                 border: '1px solid rgba(66,133,244,0.25)',
