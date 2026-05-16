@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   Video, Settings, Target, DollarSign,
-  MessageSquare, Camera, BarChart2, PlaySquare, Users, Trophy, LogOut, Menu, X
+  MessageSquare, Camera, BarChart2, PlaySquare, Users, Trophy, LogOut, Menu, X, Crosshair, CalendarDays
 } from 'lucide-react';
 import { cn } from '../components/Button';
 
@@ -19,12 +19,19 @@ export function Sidebar({ onLogout }: { onLogout: () => void }) {
       ]
     },
     {
+      label: 'Planejamento',
+      items: [
+        { name: 'Metas',         path: '/goals',        icon: <Crosshair size={17} />    },
+        { name: 'Calendário',    path: '/calendar',     icon: <CalendarDays size={17} /> },
+        { name: 'Estratégia',    path: '/strategy',     icon: <Target size={17} />       },
+        { name: 'Financeiro',    path: '/finance',      icon: <DollarSign size={17} />   },
+      ]
+    },
+    {
       label: 'Gestão',
       items: [
-        { name: 'Financeiro',    path: '/finance',      icon: <DollarSign size={17} />   },
-        { name: 'Automações',    path: '/automations',  icon: <MessageSquare size={17} /> },
-        { name: 'Estratégia',    path: '/strategy',     icon: <Target size={17} />       },
         { name: 'Conteúdo',      path: '/content',      icon: <Video size={17} />        },
+        { name: 'Automações',    path: '/automations',  icon: <MessageSquare size={17} /> },
         { name: 'Concorrentes',  path: '/competitors',  icon: <Users size={17} />        },
         { name: 'Benchmark',     path: '/benchmark',    icon: <Trophy size={17} />       },
         { name: 'Configurações', path: '/settings',     icon: <Settings size={17} />     },

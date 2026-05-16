@@ -241,6 +241,201 @@ router.get('/instagram-posts', async (req, res) => {
   } catch (e) { return err(res, e.message); }
 });
 
+// ── Instagram Posts DB endpoints ─────────────────────────────
+
+// POST /instagram-posts/sync — fetch from API and upsert to DB
+router.post('/instagram-posts/sync', async (req, res) => {
+  try {
+    if (!process.env.META_ACCESS_TOKEN || !process.env.META_IG_ACCOUNT_ID) {
+      return err(res, 'Configuração do Instagram ausente', 400);
+    }
+    const token = process.env.META_ACCESS_TOKEN;
+    const igId  = process.env.META_IG_ACCOUNT_ID;
+    const limit = parseInt(req.query.limit || '24', 10);
+
+    const url = `https://graph.facebook.com/v19.0/${igId}/media?fields=id,caption,media_type,media_url,permalink,thumbnail_url,timestamp,comments_count,like_count&limit=${limit}&access_token=${token}`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+    if (data.error) return err(res, data.error.message);
+
+    const posts = data.data || [];
+    const upsert = db.prepare(`
+      INSERT INTO instagram_posts (id, caption, media_type, media_url, thumbnail_url, permalink, posted_at, like_count, comments_count, reach, impressions, saved, video_views, synced_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT(id) DO UPDATE SET
+        caption=excluded.caption, media_url=excluded.media_url, thumbnail_url=excluded.thumbnail_url,
+        like_count=excluded.like_count, comments_count=excluded.comments_count,
+        reach=excluded.reach, impressions=excluded.impressions, saved=excluded.saved,
+        video_views=excluded.video_views, synced_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+    `);
+
+    let synced = 0;
+    await Promise.all(posts.map(async (post) => {
+      let metrics = 'impressions,reach,saved';
+      if (post.media_type === 'VIDEO') metrics += ',video_views';
+      try {
+        const insResp = await fetch(`https://graph.facebook.com/v19.0/${post.id}/insights?metric=${metrics}&access_token=${token}`);
+        const insData = await insResp.json();
+        const ins = {};
+        if (insData.data) insData.data.forEach(m => { ins[m.name] = m.values?.[0]?.value || 0; });
+        upsert.run(post.id, post.caption || null, post.media_type, post.media_url || null, post.thumbnail_url || null,
+          post.permalink || null, post.timestamp || null,
+          post.like_count || 0, post.comments_count || 0,
+          ins.reach || 0, ins.impressions || 0, ins.saved || 0, ins.video_views || 0);
+        synced++;
+      } catch {}
+    }));
+
+    return ok(res, { synced, total: posts.length });
+  } catch (e) { return err(res, e.message); }
+});
+
+// GET /instagram-posts/db — posts stored in DB
+router.get('/instagram-posts/db', (req, res) => {
+  try {
+    const tag  = req.query.tag || null;
+    const rows = db.prepare('SELECT * FROM instagram_posts ORDER BY posted_at DESC').all();
+    const posts = rows
+      .map(r => ({ ...r, tags: JSON.parse(r.tags || '[]') }))
+      .filter(r => !tag || r.tags.includes(tag));
+    return ok(res, posts);
+  } catch (e) { return err(res, e.message); }
+});
+
+// PATCH /instagram-posts/:id/tags — update tags
+router.patch('/instagram-posts/:id/tags', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { tags } = req.body;
+    if (!Array.isArray(tags)) return err(res, 'tags deve ser um array', 400);
+    db.prepare('UPDATE instagram_posts SET tags=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+      .run(JSON.stringify(tags), id);
+    return ok(res, { ok: true });
+  } catch (e) { return err(res, e.message); }
+});
+
+// POST /instagram-posts/:id/transcribe — transcribe and save
+router.post('/instagram-posts/:id/transcribe', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const post = db.prepare('SELECT * FROM instagram_posts WHERE id=?').get(id);
+    if (!post) return err(res, 'Post não encontrado', 404);
+    if (post.media_type !== 'VIDEO') return err(res, 'Transcrição disponível apenas para vídeos', 400);
+    if (!process.env.GEMINI_API_KEY) return err(res, 'GEMINI_API_KEY não configurada', 500);
+    if (!post.media_url) return err(res, 'URL do vídeo não disponível', 400);
+
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const prompt = 'Transcreva fielmente todo o áudio/fala deste vídeo em português. Inclua apenas o texto transcrito, sem timestamps ou metadados. Se o vídeo estiver em outro idioma, transcreva e depois traduza para o português.';
+
+    const videoResp = await fetch(post.media_url);
+    if (!videoResp.ok) return err(res, 'Erro ao baixar o vídeo do Instagram', 500);
+    const arrayBuf = await videoResp.arrayBuffer();
+    const videoBuffer = Buffer.from(arrayBuf);
+    if (videoBuffer.length > 20 * 1024 * 1024) return err(res, 'Vídeo muito grande para transcrição (limite 20MB)', 400);
+
+    const result = await model.generateContent([
+      { inlineData: { mimeType: 'video/mp4', data: videoBuffer.toString('base64') } },
+      prompt,
+    ]);
+    const transcript = result.response.text();
+
+    db.prepare('UPDATE instagram_posts SET transcript=?, updated_at=CURRENT_TIMESTAMP WHERE id=?').run(transcript, id);
+    return ok(res, { transcript });
+  } catch (e) { return err(res, e.message); }
+});
+
+// ── Etiquetas (ig_tags) ──────────────────────────────────────
+
+// GET /ig-tags
+router.get('/ig-tags', (req, res) => {
+  try {
+    const tags = db.prepare('SELECT name, color, created_at FROM ig_tags ORDER BY name ASC').all();
+    const posts = db.prepare('SELECT tags FROM instagram_posts').all();
+    const usage = {};
+    for (const p of posts) {
+      for (const t of JSON.parse(p.tags || '[]')) usage[t] = (usage[t] || 0) + 1;
+    }
+    return ok(res, tags.map(t => ({ ...t, usage: usage[t.name] || 0 })));
+  } catch (e) { return err(res, e.message); }
+});
+
+// POST /ig-tags
+router.post('/ig-tags', (req, res) => {
+  try {
+    const { name, color } = req.body || {};
+    if (!name?.trim()) return err(res, 'name é obrigatório', 400);
+    const slug = name.trim().toLowerCase().replace(/\s+/g, '-');
+    db.prepare('INSERT INTO ig_tags (name, color) VALUES (?, ?) ON CONFLICT(name) DO NOTHING').run(slug, color || '#E1306C');
+    return ok(res, { name: slug, color: color || '#E1306C' });
+  } catch (e) { return err(res, e.message); }
+});
+
+// PATCH /ig-tags/:name — rename and/or recolor
+router.patch('/ig-tags/:name', (req, res) => {
+  try {
+    const old = req.params.name;
+    const { name: newName, color } = req.body || {};
+    if (newName && newName !== old) {
+      const slug = newName.trim().toLowerCase().replace(/\s+/g, '-');
+      const posts = db.prepare("SELECT id, tags FROM instagram_posts WHERE tags LIKE ?").all(`%"${old}"%`);
+      const upPost = db.prepare('UPDATE instagram_posts SET tags=?, updated_at=CURRENT_TIMESTAMP WHERE id=?');
+      for (const p of posts) {
+        const tags = JSON.parse(p.tags || '[]').map((t) => t === old ? slug : t);
+        upPost.run(JSON.stringify(tags), p.id);
+      }
+      db.prepare('INSERT INTO ig_tags (name, color) SELECT ?, COALESCE(?, color) FROM ig_tags WHERE name=?').run(slug, color || null, old);
+      db.prepare('DELETE FROM ig_tags WHERE name=?').run(old);
+    } else if (color) {
+      db.prepare('UPDATE ig_tags SET color=? WHERE name=?').run(color, old);
+    }
+    return ok(res, { ok: true });
+  } catch (e) { return err(res, e.message); }
+});
+
+// DELETE /ig-tags/:name
+router.delete('/ig-tags/:name', (req, res) => {
+  try {
+    const { name } = req.params;
+    const posts = db.prepare("SELECT id, tags FROM instagram_posts WHERE tags LIKE ?").all(`%"${name}"%`);
+    const upPost = db.prepare('UPDATE instagram_posts SET tags=?, updated_at=CURRENT_TIMESTAMP WHERE id=?');
+    for (const p of posts) {
+      const tags = JSON.parse(p.tags || '[]').filter((t) => t !== name);
+      upPost.run(JSON.stringify(tags), p.id);
+    }
+    db.prepare('DELETE FROM ig_tags WHERE name=?').run(name);
+    return ok(res, { ok: true });
+  } catch (e) { return err(res, e.message); }
+});
+
+// GET /instagram-posts/tag-stats — aggregate metrics per tag
+router.get('/instagram-posts/tag-stats', (req, res) => {
+  try {
+    const rows = db.prepare('SELECT * FROM instagram_posts').all();
+    const tagMap = {};
+    for (const row of rows) {
+      const tags = JSON.parse(row.tags || '[]');
+      const reach = row.reach || row.impressions || 0;
+      const er = reach > 0 ? ((row.like_count + row.comments_count) / reach) * 100 : 0;
+      for (const tag of tags) {
+        if (!tagMap[tag]) tagMap[tag] = { tag, count: 0, totalReach: 0, totalLikes: 0, totalComments: 0, totalEr: 0, totalSaved: 0 };
+        tagMap[tag].count++;
+        tagMap[tag].totalReach += reach;
+        tagMap[tag].totalLikes += row.like_count || 0;
+        tagMap[tag].totalComments += row.comments_count || 0;
+        tagMap[tag].totalSaved += row.saved || 0;
+        tagMap[tag].totalEr += er;
+      }
+    }
+    const stats = Object.values(tagMap).map(t => ({
+      ...t,
+      avgReach: t.count > 0 ? Math.round(t.totalReach / t.count) : 0,
+      avgEr: t.count > 0 ? parseFloat((t.totalEr / t.count).toFixed(2)) : 0,
+    })).sort((a, b) => b.count - a.count);
+    return ok(res, stats);
+  } catch (e) { return err(res, e.message); }
+});
+
 // ── 1.9 Total Impact (DB) ────────────────────────────────────
 router.get('/total-impact', (req, res) => {
   try {
@@ -270,7 +465,7 @@ router.get('/total-impact', (req, res) => {
 router.get('/youtube-analytics', async (req, res) => {
   try {
     const refreshToken = process.env.YOUTUBE_ANALYTICS_REFRESH_TOKEN;
-    if (!refreshToken) return err(res, 'YouTube Analytics não autorizado. Acesse /api/auth/youtube', 401);
+    if (!refreshToken) return err(res, 'YouTube Analytics não autorizado. Acesse /api/auth/youtube', 403);
 
     const months = parseInt(req.query.months || '12', 10);
     const authClient = getYtOAuthClient();
@@ -887,6 +1082,142 @@ router.post('/transcribe-competitor-video', async (req, res) => {
   } catch (e) { return err(res, e.message); }
 });
 
+// ── Calendário de Conteúdo ────────────────────────────────────
+
+router.get('/calendar', (req, res) => {
+  try {
+    const month = req.query.month || new Date().toISOString().slice(0, 7);
+
+    // Itens planejados manualmente
+    const planned = db.prepare(
+      "SELECT * FROM content_calendar WHERE planned_date LIKE ? ORDER BY planned_date ASC"
+    ).all(`${month}%`);
+
+    // Posts Instagram sincronizados (têm data precisa de publicação)
+    const igPosts = db.prepare(
+      "SELECT id, caption, media_type, posted_at, tags FROM instagram_posts WHERE substr(posted_at,1,7)=? ORDER BY posted_at ASC"
+    ).all(month);
+
+    const items = [
+      ...planned.map(p => ({ ...p, source: 'planned', tags: JSON.parse(p.tags || '[]') })),
+      ...igPosts.map(p => ({
+        id: `ig_${p.id}`,
+        source: 'instagram',
+        title: p.caption ? p.caption.slice(0, 100) : '(Sem legenda)',
+        channel: 'instagram',
+        format: p.media_type === 'VIDEO' ? 'reel' : p.media_type === 'CAROUSEL_ALBUM' ? 'carrossel' : 'foto',
+        planned_date: p.posted_at ? p.posted_at.slice(0, 10) : null,
+        status: 'published',
+        tags: JSON.parse(p.tags || '[]'),
+        notes: null,
+      })),
+    ].filter(i => i.planned_date);
+
+    return ok(res, { items });
+  } catch (e) { return err(res, e.message); }
+});
+
+router.post('/calendar', (req, res) => {
+  try {
+    const { title, channel, format, planned_date, notes, tags } = req.body || {};
+    if (!title || !channel || !format || !planned_date) return err(res, 'Campos obrigatórios ausentes', 400);
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+    db.prepare('INSERT INTO content_calendar (id,title,channel,format,planned_date,notes,tags) VALUES (?,?,?,?,?,?,?)')
+      .run(id, title, channel, format, planned_date, notes || null, JSON.stringify(tags || []));
+    return ok(res, { id });
+  } catch (e) { return err(res, e.message); }
+});
+
+router.put('/calendar/:id', (req, res) => {
+  try {
+    const { title, channel, format, planned_date, notes, tags } = req.body || {};
+    db.prepare('UPDATE content_calendar SET title=?,channel=?,format=?,planned_date=?,notes=?,tags=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')
+      .run(title, channel, format, planned_date, notes || null, JSON.stringify(tags || []), req.params.id);
+    return ok(res, { ok: true });
+  } catch (e) { return err(res, e.message); }
+});
+
+router.patch('/calendar/:id/status', (req, res) => {
+  try {
+    const { status } = req.body || {};
+    db.prepare('UPDATE content_calendar SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(status, req.params.id);
+    return ok(res, { ok: true });
+  } catch (e) { return err(res, e.message); }
+});
+
+router.delete('/calendar/:id', (req, res) => {
+  try {
+    db.prepare('DELETE FROM content_calendar WHERE id=?').run(req.params.id);
+    return ok(res, { ok: true });
+  } catch (e) { return err(res, e.message); }
+});
+
+// ── Goals / OKRs ─────────────────────────────────────────────
+
+function resolveCurrentValue(metric) {
+  const today = new Date().toISOString().slice(0, 7); // YYYY-MM
+  try {
+    switch (metric) {
+      case 'instagram_followers':
+        return db.prepare('SELECT followers FROM instagram_history ORDER BY date DESC LIMIT 1').get()?.followers || 0;
+      case 'youtube_subscribers':
+        return db.prepare('SELECT subscribers FROM youtube_history ORDER BY date DESC LIMIT 1').get()?.subscribers || 0;
+      case 'instagram_reach_monthly':
+        return db.prepare("SELECT SUM(reach) as v FROM instagram_history WHERE date LIKE ?").get(`${today}%`)?.v || 0;
+      case 'youtube_views_monthly':
+        return db.prepare("SELECT SUM(views) as v FROM youtube_history WHERE date LIKE ?").get(`${today}%`)?.v || 0;
+      case 'posts_instagram_monthly':
+        return db.prepare("SELECT COUNT(*) as v FROM instagram_posts WHERE substr(posted_at,1,7)=?").get(today)?.v || 0;
+      case 'videos_youtube_monthly': {
+        const latest = db.prepare('SELECT videos FROM youtube_history ORDER BY date DESC LIMIT 1').get()?.videos || 0;
+        const prev   = db.prepare('SELECT videos FROM youtube_history WHERE date < ? ORDER BY date DESC LIMIT 1').get(`${today}-01`)?.videos || latest;
+        return Math.max(latest - prev, 0);
+      }
+      case 'meta_leads_monthly':
+        return db.prepare("SELECT SUM(leads) as v FROM meta_history WHERE date LIKE ?").get(`${today}%`)?.v || 0;
+      case 'revenue_monthly':
+        return db.prepare("SELECT SUM(amount) as v FROM transactions WHERE type='income' AND date LIKE ?").get(`${today}%`)?.v || 0;
+      default:
+        return 0;
+    }
+  } catch { return 0; }
+}
+
+router.get('/goals', (req, res) => {
+  try {
+    const goals = db.prepare('SELECT * FROM goals ORDER BY created_at ASC').all();
+    return ok(res, goals.map(g => ({ ...g, current_value: resolveCurrentValue(g.metric) })));
+  } catch (e) { return err(res, e.message); }
+});
+
+router.post('/goals', (req, res) => {
+  try {
+    const { label, metric, target_value, deadline, notes } = req.body || {};
+    if (!label || !metric || target_value == null || !deadline) return err(res, 'Campos obrigatórios ausentes', 400);
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+    const baseline = resolveCurrentValue(metric);
+    db.prepare('INSERT INTO goals (id,label,metric,target_value,baseline_value,deadline,notes) VALUES (?,?,?,?,?,?,?)')
+      .run(id, label, metric, target_value, baseline, deadline, notes || null);
+    return ok(res, { id, baseline_value: baseline });
+  } catch (e) { return err(res, e.message); }
+});
+
+router.put('/goals/:id', (req, res) => {
+  try {
+    const { label, target_value, deadline, notes } = req.body || {};
+    db.prepare('UPDATE goals SET label=?,target_value=?,deadline=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?')
+      .run(label, target_value, deadline, notes || null, req.params.id);
+    return ok(res, { ok: true });
+  } catch (e) { return err(res, e.message); }
+});
+
+router.delete('/goals/:id', (req, res) => {
+  try {
+    db.prepare('DELETE FROM goals WHERE id=?').run(req.params.id);
+    return ok(res, { ok: true });
+  } catch (e) { return err(res, e.message); }
+});
+
 // ── Auth ─────────────────────────────────────────────────────
 const JWT_SECRET = process.env.JWT_SECRET || 'changeme-set-in-env';
 
@@ -923,7 +1254,7 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // ── YouTube Analytics OAuth + Backfill ───────────────────────
-const YT_REDIRECT_URI = 'https://dash.amzcursos.com/api/auth/youtube/callback';
+const YT_REDIRECT_URI = (process.env.APP_BASE_URL || 'https://dash.amzcursos.com') + '/api/auth/youtube/callback';
 
 function getYtOAuthClient() {
   const clientId     = process.env.YOUTUBE_ANALYTICS_CLIENT_ID;

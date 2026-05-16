@@ -11,6 +11,8 @@ import { DashboardInstagram } from './pages/DashboardInstagram';
 import { DashboardYoutube } from './pages/DashboardYoutube';
 import { Competitors } from './pages/Competitors';
 import { Benchmark } from './pages/Benchmark';
+import { Goals } from './pages/Goals';
+import { Calendar } from './pages/Calendar';
 import { Login, getToken, clearToken } from './pages/Login';
 
 import { SWRConfig } from 'swr';
@@ -19,10 +21,16 @@ function authFetcher(url: string) {
   const token = getToken();
   return fetch(url, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
-  }).then(res => {
+  }).then(async res => {
     if (res.status === 401) {
-      clearToken();
-      window.location.reload();
+      // Only log out on actual JWT failures, not on feature-level auth errors (403)
+      const data = await res.json();
+      const isJwtFailure = data?.error === 'Não autenticado' || data?.error === 'Token inválido ou expirado';
+      if (isJwtFailure) {
+        clearToken();
+        window.location.reload();
+      }
+      return data;
     }
     return res.json();
   });
@@ -57,6 +65,8 @@ function App() {
             <Route path="content" element={<Content />} />
             <Route path="competitors" element={<Competitors />} />
             <Route path="benchmark" element={<Benchmark />} />
+            <Route path="goals"     element={<Goals />} />
+            <Route path="calendar"  element={<Calendar />} />
             <Route path="docs" element={<div style={{padding:'2rem',color:'var(--text-secondary)'}}>Página não disponível.</div>} />
             <Route path="settings" element={<div className="p-4">Configurações</div>} />
           </Route>

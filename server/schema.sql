@@ -64,3 +64,54 @@ CREATE TABLE IF NOT EXISTS automation_rules (
   active INTEGER DEFAULT 1,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS goals (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  metric TEXT NOT NULL,
+  target_value REAL NOT NULL,
+  baseline_value REAL DEFAULT 0,
+  deadline TEXT NOT NULL,
+  notes TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS content_calendar (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  format TEXT NOT NULL,
+  planned_date TEXT NOT NULL,
+  status TEXT DEFAULT 'planned',
+  notes TEXT,
+  tags TEXT DEFAULT '[]',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS ig_tags (
+  name TEXT PRIMARY KEY,
+  color TEXT NOT NULL DEFAULT '#E1306C',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS instagram_posts (
+  id TEXT PRIMARY KEY,
+  caption TEXT,
+  media_type TEXT,
+  media_url TEXT,
+  thumbnail_url TEXT,
+  permalink TEXT,
+  posted_at TEXT,
+  like_count INTEGER DEFAULT 0,
+  comments_count INTEGER DEFAULT 0,
+  reach INTEGER DEFAULT 0,
+  impressions INTEGER DEFAULT 0,
+  saved INTEGER DEFAULT 0,
+  video_views INTEGER DEFAULT 0,
+  tags TEXT DEFAULT '[]',
+  transcript TEXT,
+  synced_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);

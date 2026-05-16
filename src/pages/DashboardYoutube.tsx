@@ -39,6 +39,7 @@ export function DashboardYoutube() {
   const { data: stats }     = useSWR(`${API}/channel-stats`);
   const { data: analytics, error: analyticsError } = useSWR(`${API}/youtube-analytics?months=${months}`);
   const { data: myVideos }  = useSWR(`${API}/my-video-stats`);
+  const { data: videosDb }  = useSWR(`${API}/videos`);
 
   const totalSubs  = parseInt(stats?.subscriberCount || '0');
   const summary:  any    = analytics?.summary  || {};
@@ -63,6 +64,27 @@ export function DashboardYoutube() {
   }, [myVideos, cutoff]);
 
   // KPIs calculados do período filtrado
+  // ── Pillar analysis ──────────────────────────────────────────
+  const PILLAR_META: Record<string, { label: string; color: string; desc: string }> = {
+    diagnostic: { label: 'Diagnóstico', color: '#3B82F6', desc: 'Descoberta e conscientização' },
+    solution:   { label: 'Solução',     color: '#10B981', desc: 'Tutoriais e resolução de problemas' },
+    backstage:  { label: 'Bastidor',    color: '#F59E0B', desc: 'Conteúdo pessoal e relacionamento' },
+  };
+  const pillarStats = Object.entries(PILLAR_META).map(([key, meta]) => {
+    const vids = ((videosDb || []) as any[]).filter(v => v.pillar === key && v.status === 'published');
+    if (!vids.length) return null;
+    const n        = vids.length;
+    const avgViews = Math.round(vids.reduce((s: number, v: any) => s + (v.views || 0), 0) / n);
+    const avgLikes = Math.round(vids.reduce((s: number, v: any) => s + (v.likes || 0), 0) / n);
+    const avgEr    = avgViews > 0 ? parseFloat(((avgLikes / avgViews) * 100).toFixed(2)) : 0;
+    return { key, ...meta, count: n, avgViews, avgLikes, avgEr };
+  }).filter((x): x is NonNullable<typeof x> => x !== null);
+
+  const pMaxViews = pillarStats.length ? Math.max(...pillarStats.map(p => p.avgViews)) || 1 : 1;
+  const pMaxEr    = pillarStats.length ? Math.max(...pillarStats.map(p => p.avgEr))    || 1 : 1;
+  const bestPillarViews = pillarStats.length ? pillarStats.reduce((b, p) => p.avgViews > b.avgViews ? p : b) : null;
+  const bestPillarEr    = pillarStats.length ? pillarStats.reduce((b, p) => p.avgEr    > b.avgEr    ? p : b) : null;
+
   const periodViews   = monthly.reduce((s: number, r: any) => s + r.views, 0);
   const periodUploads = filteredVideos.length;
   const avgViewsPeriod = periodUploads > 0 ? Math.round(periodViews / periodUploads) : 0;
@@ -114,11 +136,29 @@ export function DashboardYoutube() {
 
       {/* Banner sem autorização */}
       {notAuthorized && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.875rem 1rem', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 10 }}>
-          <AlertCircle size={16} style={{ color: '#fbbf24', flexShrink: 0 }} />
-          <p style={{ fontSize: '0.85rem', color: '#fbbf24' }}>
-            YouTube Analytics não conectado. <a href="/api/auth/youtube" style={{ fontWeight: 700, textDecoration: 'underline' }}>Clique aqui para autorizar</a> e desbloquear Watch Time, Inscritos por período e Fontes de Tráfego.
-          </p>
+        <div style={{ padding: '1rem 1.25rem', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: '0.875rem' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+            <AlertCircle size={18} style={{ color: '#fbbf24', flexShrink: 0, marginTop: 2 }} />
+            <div style={{ flex: 1 }}>
+              <p style={{ fontSize: '0.875rem', fontWeight: 700, color: '#fbbf24', marginBottom: '0.5rem' }}>
+                YouTube Analytics não conectado
+              </p>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: '0.875rem' }}>
+                Para desbloquear Watch Time, inscritos por período, CTR e fontes de tráfego, autorize o acesso ao YouTube Analytics:
+              </p>
+              <ol style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.8, paddingLeft: '1.25rem', marginBottom: '1rem' }}>
+                <li>No <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer" style={{ color: '#fbbf24', fontWeight: 600 }}>Google Cloud Console</a>, adicione <code style={{ background: 'rgba(255,255,255,0.08)', padding: '0.1rem 0.3rem', borderRadius: 3 }}>http://localhost:3001/api/auth/youtube/callback</code> como URI de redirecionamento autorizado do OAuth.</li>
+                <li>Depois clique no botão abaixo para autorizar.</li>
+                <li>Após autorizar, os dados históricos serão importados automaticamente.</li>
+              </ol>
+              <a
+                href="/api/auth/youtube"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', background: '#fbbf24', color: '#000', fontWeight: 700, fontSize: '0.825rem', padding: '0.5rem 1.125rem', borderRadius: '0.5rem', textDecoration: 'none' }}
+              >
+                Conectar YouTube Analytics
+              </a>
+            </div>
+          </div>
         </div>
       )}
 
@@ -314,6 +354,70 @@ export function DashboardYoutube() {
           )}
         </CardContent>
       </Card>
+
+      {/* Pillar Performance */}
+      {pillarStats.length >= 2 && (
+        <Card className="glass-panel">
+          <CardHeader style={{ paddingBottom: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <CardTitle style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem' }}>
+                <BarChart3 size={15} style={{ color: '#3B82F6' }} /> Performance por Pilar
+              </CardTitle>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>
+                {((videosDb || []) as any[]).filter(v => v.status === 'published').length} vídeos publicados no total
+              </span>
+            </div>
+          </CardHeader>
+          <CardContent style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+            {/* Insight */}
+            <div style={{ padding: '0.625rem 0.875rem', background: 'rgba(59,130,246,0.07)', border: '1px solid rgba(59,130,246,0.18)', borderRadius: '0.5rem', fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.6, display: 'flex', flexWrap: 'wrap', gap: '0.25rem 0.5rem' }}>
+              <span>💡</span>
+              {bestPillarViews && <span><strong style={{ color: bestPillarViews.color }}>{bestPillarViews.label}</strong> tem mais views ({fmt(bestPillarViews.avgViews)}/vídeo)</span>}
+              {bestPillarEr?.key !== bestPillarViews?.key && bestPillarEr && <span> · <strong style={{ color: bestPillarEr.color }}>{bestPillarEr.label}</strong> tem melhor engajamento ({bestPillarEr.avgEr.toFixed(2)}% ER)</span>}
+            </div>
+
+            {/* Pillar cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${pillarStats.length}, 1fr)`, gap: '0.75rem' }}>
+              {pillarStats.map(ps => (
+                <div key={ps.key} style={{ padding: '1rem', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {/* Header */}
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+                      <div style={{ width: 10, height: 10, borderRadius: '50%', background: ps.color, flexShrink: 0 }} />
+                      <p style={{ fontSize: '0.875rem', fontWeight: 700 }}>{ps.label}</p>
+                    </div>
+                    <p style={{ fontSize: '0.65rem', color: 'var(--text-tertiary)', paddingLeft: '1.125rem' }}>{ps.desc} · {ps.count} vídeo{ps.count !== 1 ? 's' : ''}</p>
+                  </div>
+
+                  {/* Metrics */}
+                  {([
+                    { label: 'Média de Views', value: fmt(ps.avgViews), pct: ps.avgViews / pMaxViews, isBest: bestPillarViews?.key === ps.key },
+                    { label: 'Engajamento',    value: `${ps.avgEr.toFixed(2)}%`, pct: pMaxEr > 0 ? ps.avgEr / pMaxEr : 0, isBest: bestPillarEr?.key === ps.key },
+                    { label: 'Curtidas méd.',  value: fmt(ps.avgLikes), pct: ps.avgViews > 0 ? ps.avgLikes / ps.avgViews : 0, isBest: false },
+                  ] as { label: string; value: string; pct: number; isBest: boolean }[]).map(m => (
+                    <div key={m.label}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                        <span style={{ fontSize: '0.63rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{m.label}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                          {m.isBest && (
+                            <span style={{ fontSize: '0.6rem', fontWeight: 700, color: ps.color, background: `${ps.color}18`, border: `1px solid ${ps.color}40`, padding: '0.05rem 0.3rem', borderRadius: '999px' }}>
+                              melhor
+                            </span>
+                          )}
+                          <span style={{ fontSize: '0.8rem', fontWeight: 700, color: m.isBest ? ps.color : 'var(--text-primary)' }}>{m.value}</span>
+                        </div>
+                      </div>
+                      <div style={{ height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.07)', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', borderRadius: 3, background: m.isBest ? ps.color : `${ps.color}70`, width: `${Math.min(Math.round(m.pct * 100), 100)}%`, transition: 'width 0.5s ease' }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

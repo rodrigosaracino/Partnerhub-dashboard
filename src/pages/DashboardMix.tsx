@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import useSWR from 'swr';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/Card';
 import { Badge } from '../components/Badge';
@@ -6,8 +7,9 @@ import { KpiCard } from '../components/KpiCard';
 import { API, fmt, currency, TOOLTIP_STYLE } from '../utils/format';
 import { DateRangeFilter, filterByRange, type DateRange } from '../components/DateRangeFilter';
 import {
-  Users, DollarSign, Video, Globe, TrendingUp, Zap, Camera,
+  Users, DollarSign, Video, Globe, TrendingUp, Zap, Camera, Target, ArrowRight,
 } from 'lucide-react';
+import { METRICS, type MetricDef } from './Goals';
 import {
   Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Legend, ComposedChart,
@@ -24,6 +26,7 @@ export function DashboardMix() {
   const [range, setRange] = useState<DateRange>(initRange());
 
   const { data: impact } = useSWR(`${API}/total-impact`);
+  const { data: goalsData } = useSWR(`${API}/goals`);
   const { data: igMonthRes } = useSWR(`${API}/instagram-monthly`);
   const { data: ytMonthRes } = useSWR(`${API}/youtube-monthly-stats`);
   const { data: metaHistRes } = useSWR(`${API}/meta-history`);
@@ -51,6 +54,19 @@ export function DashboardMix() {
     }
     return { income, goal, progress };
   })();
+
+  // Goals summary
+  const goals: any[] = goalsData || [];
+  const goalsWithStatus = goals.map(g => {
+    const range = g.target_value - g.baseline_value;
+    const progress = range > 0 ? Math.min((g.current_value - g.baseline_value) / range, 1) : 0;
+    const created  = new Date(g.created_at).getTime();
+    const deadline = new Date(g.deadline + '-28').getTime();
+    const now      = Date.now();
+    const timeRatio = deadline > created ? Math.min((now - created) / (deadline - created), 1) : 1;
+    const status = progress >= 1 ? 'achieved' : progress >= timeRatio ? 'on_track' : progress >= timeRatio * 0.7 ? 'at_risk' : 'behind';
+    return { ...g, progress, status };
+  });
 
   // Build filtered combined chart
   const combinedChart = (() => {
@@ -86,6 +102,49 @@ export function DashboardMix() {
       <div style={{ padding: '0.75rem 1rem', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '0.75rem' }}>
         <DateRangeFilter value={range} onChange={setRange} accentColor="#6366f1" />
       </div>
+
+      {/* Goals strip */}
+      {goalsWithStatus.length > 0 && (
+        <Card className="glass-panel" style={{ border: '1px solid rgba(129,140,248,0.2)', background: 'rgba(129,140,248,0.04)' }}>
+          <CardHeader style={{ paddingBottom: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <CardTitle style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem' }}>
+                <Target size={15} style={{ color: '#818CF8' }} /> Metas do Período
+              </CardTitle>
+              <Link to="/goals" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.72rem', color: '#818CF8', textDecoration: 'none' }}>
+                Ver todas <ArrowRight size={12} />
+              </Link>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.625rem' }}>
+              {goalsWithStatus.map((g: any) => {
+                const def: MetricDef = METRICS.find(m => m.key === g.metric) || METRICS[0];
+                const statusColors: Record<string, string> = { achieved: '#10B981', on_track: '#3B82F6', at_risk: '#F59E0B', behind: '#EF4444' };
+                const sc = statusColors[g.status] || '#6B7280';
+                const pct = Math.round(g.progress * 100);
+                return (
+                  <div key={g.id} style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '0.625rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                        <span style={{ color: def.color }}>{def.icon}</span> {g.label}
+                      </span>
+                      <span style={{ fontSize: '0.65rem', fontWeight: 700, color: sc }}>{pct}%</span>
+                    </div>
+                    <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.07)', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', borderRadius: 2, background: sc, width: `${pct}%` }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.375rem', fontSize: '0.65rem', color: 'var(--text-secondary)' }}>
+                      <span>{def.format(g.current_value)}</span>
+                      <span>{def.format(g.target_value)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* KPIs anuais */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
