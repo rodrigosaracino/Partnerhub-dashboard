@@ -144,94 +144,94 @@ function VideoCard({ video, platform }: { video: VideoItem, platform: 'youtube' 
     : 'var(--text-secondary)';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-      {/* Card original */}
-      <a href={video.url} target="_blank" rel="noopener noreferrer" className="video-card" title={video.title}>
-        <div className="video-thumb-wrap">
-          <img src={video.thumbnail} alt={video.title} className="video-thumb" loading="lazy" />
-          {platform === 'youtube' && video.duration && (
-            <span className="video-duration">{parseDuration(video.duration)}</span>
-          )}
-          <div className="video-play-overlay">
-            {(platform === 'youtube' || video.duration === 'VIDEO') && <Play size={28} fill="white" color="white" />}
-          </div>
-        </div>
-        <div className="video-info">
-          <p className="video-title">{video.title}</p>
-          <p className="video-date text-xs text-muted">{relativeDate(video.publishedAt)}</p>
-          <div className="video-stats">
-            {platform === 'youtube' && (
-              <span className="video-stat"><Eye size={13} />{fmt(video.views)}</span>
-            )}
-            <span className="video-stat"><ThumbsUp size={13} />{fmt(video.likes)}</span>
-            <span className="video-stat"><MessageSquare size={13} />{fmt(video.comments)}</span>
-            <span className="video-stat" style={{ color: engColor, marginLeft: 'auto' }}>
-              <Zap size={13} />{video.engagementRate.toFixed(1)}%
-            </span>
-          </div>
+    <div className="video-card" style={{ cursor: 'default' }}>
+      {/* Só o thumbnail navega */}
+      <a href={video.url} target="_blank" rel="noopener noreferrer" className="video-thumb-wrap">
+        <img src={video.thumbnail} alt={video.title} className="video-thumb" loading="lazy" />
+        {platform === 'youtube' && video.duration && (
+          <span className="video-duration">{parseDuration(video.duration)}</span>
+        )}
+        <div className="video-play-overlay">
+          {(platform === 'youtube' || video.duration === 'VIDEO') && <Play size={28} fill="white" color="white" />}
         </div>
       </a>
 
-      {/* Botão de transcrição — fora do card para evitar clipping */}
-      {canTranscribe && (
-        <div>
-          <button
-            onClick={handleTranscribe}
-            disabled={transcribing}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '0.375rem',
-              padding: '0.4rem 0.75rem', borderRadius: '0.5rem',
-              fontSize: '0.75rem', fontWeight: 600, width: '100%', justifyContent: 'center',
-              background: transcribing ? 'rgba(255,255,255,0.04)' : 'rgba(66,133,244,0.12)',
-              border: '1px solid rgba(66,133,244,0.3)',
-              color: transcribing ? 'var(--text-secondary)' : '#60a5fa',
-              cursor: transcribing ? 'not-allowed' : 'pointer',
-              transition: 'all 0.2s',
-            }}
-          >
-            {transcribing
-              ? <><Loader2 size={12} className="animate-spin" /> Transcrevendo...</>
-              : <><FileText size={12} /> {transcript ? 'Retranscrever' : 'Transcrever com Gemini'}</>
-            }
-          </button>
+      <div className="video-info">
+        <a href={video.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none', color: 'inherit' }}>
+          <p className="video-title">{video.title}</p>
+        </a>
+        <p className="video-date text-xs text-muted">{relativeDate(video.publishedAt)}</p>
 
-          {transcriptError && (
-            <p style={{ fontSize: '0.7rem', color: '#f87171', marginTop: '0.25rem', lineHeight: 1.4 }}>
-              {transcriptError}
-            </p>
+        <div className="video-stats">
+          {platform === 'youtube' && (
+            <span className="video-stat"><Eye size={13} />{fmt(video.views)}</span>
           )}
-
-          {transcript && (
-            <div style={{ marginTop: '0.375rem' }}>
-              <button
-                onClick={() => setTranscriptOpen(o => !o)}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  width: '100%', padding: '0.3rem 0.6rem', borderRadius: '0.375rem',
-                  fontSize: '0.7rem', background: 'rgba(255,255,255,0.04)',
-                  border: '1px solid rgba(255,255,255,0.08)', color: 'var(--text-secondary)',
-                  cursor: 'pointer',
-                }}
-              >
-                <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                  <FileText size={11} /> Ver transcrição
-                </span>
-                {transcriptOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-              </button>
-              {transcriptOpen && (
-                <div style={{
-                  marginTop: '0.25rem', padding: '0.625rem', borderRadius: '0.375rem',
-                  background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)',
-                  fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.65,
-                  maxHeight: '200px', overflowY: 'auto', whiteSpace: 'pre-wrap',
-                }}>
-                  {transcript}
-                </div>
-              )}
-            </div>
-          )}
+          <span className="video-stat"><ThumbsUp size={13} />{fmt(video.likes)}</span>
+          <span className="video-stat"><MessageSquare size={13} />{fmt(video.comments)}</span>
+          <span className="video-stat" style={{ color: engColor, marginLeft: 'auto' }}>
+            <Zap size={13} />{video.engagementRate.toFixed(1)}%
+          </span>
         </div>
-      )}
+
+        {canTranscribe && (
+          <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+            <button
+              onClick={handleTranscribe}
+              disabled={transcribing}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '0.375rem',
+                padding: '0.4rem 0.6rem', borderRadius: '0.375rem',
+                fontSize: '0.72rem', fontWeight: 600, width: '100%', justifyContent: 'center',
+                background: transcribing ? 'rgba(255,255,255,0.06)' : '#1d4ed8',
+                border: 'none',
+                color: '#fff',
+                cursor: transcribing ? 'not-allowed' : 'pointer',
+                transition: 'opacity 0.2s',
+                opacity: transcribing ? 0.6 : 1,
+              }}
+            >
+              {transcribing
+                ? <><Loader2 size={12} className="animate-spin" /> Transcrevendo...</>
+                : <><FileText size={12} /> {transcript ? 'Retranscrever' : 'Transcrever'}</>
+              }
+            </button>
+
+            {transcriptError && (
+              <p style={{ fontSize: '0.68rem', color: '#f87171', lineHeight: 1.4 }}>{transcriptError}</p>
+            )}
+
+            {transcript && (
+              <>
+                <button
+                  onClick={() => setTranscriptOpen(o => !o)}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    width: '100%', padding: '0.3rem 0.6rem', borderRadius: '0.375rem',
+                    fontSize: '0.7rem', background: 'rgba(255,255,255,0.06)',
+                    border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                    <FileText size={11} /> Ver transcrição
+                  </span>
+                  {transcriptOpen ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                </button>
+                {transcriptOpen && (
+                  <div style={{
+                    padding: '0.625rem', borderRadius: '0.375rem',
+                    background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)',
+                    fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.65,
+                    maxHeight: '200px', overflowY: 'auto', whiteSpace: 'pre-wrap',
+                  }}>
+                    {transcript}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
