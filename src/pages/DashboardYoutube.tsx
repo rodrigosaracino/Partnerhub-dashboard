@@ -41,9 +41,6 @@ export function DashboardYoutube() {
   const { data: myVideos }  = useSWR(`${API}/my-video-stats`);
 
   const totalSubs  = parseInt(stats?.subscriberCount || '0');
-  const _totalViews = parseInt(stats?.viewCount || '0');
-  const _totalVids  = parseInt(stats?.videoCount || '0');
-
   const summary:  any    = analytics?.summary  || {};
   const monthly:  any[]  = analytics?.monthly  || [];
   const traffic:  any[]  = analytics?.trafficSources || [];
