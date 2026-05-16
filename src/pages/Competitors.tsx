@@ -2,7 +2,8 @@ import { useState, useCallback } from 'react';
 import {
   Users, Plus, ExternalLink, ThumbsUp, MessageSquare,
   Eye, TrendingUp, RefreshCw, ChevronDown, ChevronUp,
-  Globe, Play, Search, AlertCircle, Loader2, Zap, X, Sparkles
+  Globe, Play, Search, AlertCircle, Loader2, Zap, X, Sparkles,
+  FileText,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { getToken } from './Login';
@@ -37,6 +38,7 @@ interface VideoItem {
   title: string;
   publishedAt: string;
   thumbnail: string;
+  media_url?: string | null;
   views: number;
   likes: number;
   comments: number;
@@ -103,6 +105,39 @@ function saveSaved(list: SavedChannel[]) {
 // ─── Sub-components ───────────────────────────────────────────
 
 function VideoCard({ video, platform }: { video: VideoItem, platform: 'youtube' | 'instagram' }) {
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcript, setTranscript] = useState<string | null>(null);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
+
+  const canTranscribe = platform === 'youtube' || (platform === 'instagram' && video.duration === 'VIDEO' && !!video.media_url);
+
+  const handleTranscribe = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setTranscribing(true);
+    setTranscriptError(null);
+    try {
+      const token = getToken();
+      const body = platform === 'youtube'
+        ? { platform: 'youtube', youtube_id: video.id }
+        : { platform: 'instagram', media_url: video.media_url };
+      const resp = await authFetch(`${API_BASE}/transcribe-competitor-video`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Erro ao transcrever');
+      setTranscript(data.transcript);
+      setTranscriptOpen(true);
+    } catch (e: any) {
+      setTranscriptError(e.message);
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
   const engColor = video.engagementRate >= 5
     ? 'var(--success)'
     : video.engagementRate >= 2
@@ -110,15 +145,9 @@ function VideoCard({ video, platform }: { video: VideoItem, platform: 'youtube' 
     : 'var(--text-secondary)';
 
   return (
-    <a
-      href={video.url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="video-card"
-      title={video.title}
-    >
-      {/* Thumbnail */}
-      <div className="video-thumb-wrap">
+    <div className="video-card" style={{ cursor: 'default' }}>
+      {/* Thumbnail — clicável */}
+      <a href={video.url} target="_blank" rel="noopener noreferrer" className="video-thumb-wrap" title={video.title}>
         <img src={video.thumbnail} alt={video.title} className="video-thumb" loading="lazy" />
         {platform === 'youtube' && video.duration && (
           <span className="video-duration">{parseDuration(video.duration)}</span>
@@ -126,35 +155,87 @@ function VideoCard({ video, platform }: { video: VideoItem, platform: 'youtube' 
         <div className="video-play-overlay">
           {(platform === 'youtube' || video.duration === 'VIDEO') && <Play size={28} fill="white" color="white" />}
         </div>
-      </div>
+      </a>
 
       {/* Info */}
       <div className="video-info">
-        <p className="video-title">{video.title}</p>
+        <a href={video.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none' }}>
+          <p className="video-title">{video.title}</p>
+        </a>
         <p className="video-date text-xs text-muted">{relativeDate(video.publishedAt)}</p>
 
         <div className="video-stats">
           {platform === 'youtube' && (
-            <span className="video-stat">
-              <Eye size={13} />
-              {fmt(video.views)}
-            </span>
+            <span className="video-stat"><Eye size={13} />{fmt(video.views)}</span>
           )}
-          <span className="video-stat">
-            <ThumbsUp size={13} />
-            {fmt(video.likes)}
-          </span>
-          <span className="video-stat">
-            <MessageSquare size={13} />
-            {fmt(video.comments)}
-          </span>
+          <span className="video-stat"><ThumbsUp size={13} />{fmt(video.likes)}</span>
+          <span className="video-stat"><MessageSquare size={13} />{fmt(video.comments)}</span>
           <span className="video-stat" style={{ color: engColor, marginLeft: 'auto' }}>
-            <Zap size={13} />
-            {video.engagementRate.toFixed(1)}%
+            <Zap size={13} />{video.engagementRate.toFixed(1)}%
           </span>
         </div>
+
+        {/* Botão de transcrição */}
+        {canTranscribe && (
+          <div style={{ marginTop: '0.5rem' }}>
+            <button
+              onClick={handleTranscribe}
+              disabled={transcribing}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '0.3rem',
+                padding: '0.25rem 0.6rem', borderRadius: '0.375rem',
+                fontSize: '0.7rem', fontWeight: 600, width: '100%', justifyContent: 'center',
+                background: transcribing ? 'rgba(255,255,255,0.04)' : 'rgba(66,133,244,0.1)',
+                border: '1px solid rgba(66,133,244,0.25)',
+                color: transcribing ? 'var(--text-secondary)' : '#60a5fa',
+                cursor: transcribing ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {transcribing
+                ? <><Loader2 size={11} className="animate-spin" /> Transcrevendo...</>
+                : <><FileText size={11} /> {transcript ? 'Retranscrever' : 'Transcrever'}</>
+              }
+            </button>
+
+            {transcriptError && (
+              <p style={{ fontSize: '0.68rem', color: '#f87171', marginTop: '0.3rem', lineHeight: 1.4 }}>
+                {transcriptError}
+              </p>
+            )}
+
+            {transcript && (
+              <div style={{ marginTop: '0.375rem' }}>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setTranscriptOpen(o => !o); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    width: '100%', padding: '0.25rem 0.5rem', borderRadius: '0.375rem',
+                    fontSize: '0.68rem', background: 'rgba(255,255,255,0.04)',
+                    border: '1px solid rgba(255,255,255,0.08)', color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                    <FileText size={10} /> Transcrição
+                  </span>
+                  {transcriptOpen ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                </button>
+                {transcriptOpen && (
+                  <div style={{
+                    marginTop: '0.25rem', padding: '0.5rem', borderRadius: '0.375rem',
+                    background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
+                    fontSize: '0.7rem', color: 'var(--text-secondary)', lineHeight: 1.6,
+                    maxHeight: '160px', overflowY: 'auto', whiteSpace: 'pre-wrap',
+                  }}>
+                    {transcript}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
-    </a>
+    </div>
   );
 }
 
