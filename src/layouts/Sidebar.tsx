@@ -1,19 +1,21 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   Video, Settings, Target, DollarSign,
-  MessageSquare, Camera, BarChart2, PlaySquare, Users, Trophy, LogOut
+  MessageSquare, Camera, BarChart2, PlaySquare, Users, Trophy, LogOut, Menu, X
 } from 'lucide-react';
 import { cn } from '../components/Button';
 
 export function Sidebar({ onLogout }: { onLogout: () => void }) {
+  const [open, setOpen] = useState(false);
+
   const navGroups = [
     {
       label: 'Dashboards',
       items: [
-        { name: 'Mix / Visão Geral', path: '/',           icon: <BarChart2 size={17} />,   exact: true },
-        { name: 'Instagram',         path: '/instagram',  icon: <Camera size={17} />             },
-        { name: 'YouTube',           path: '/youtube',    icon: <PlaySquare size={17} />         },
+        { name: 'Mix / Visão Geral', path: '/',           icon: <BarChart2 size={17} />, exact: true },
+        { name: 'Instagram',         path: '/instagram',  icon: <Camera size={17} /> },
+        { name: 'YouTube',           path: '/youtube',    icon: <PlaySquare size={17} /> },
       ]
     },
     {
@@ -30,14 +32,29 @@ export function Sidebar({ onLogout }: { onLogout: () => void }) {
     }
   ];
 
-  const allItems = navGroups.flatMap(g => g.items);
+  // Bottom nav: 5 key items + Menu button
+  const bottomNavItems = [
+    { name: 'Início',       path: '/',            icon: <BarChart2 size={20} />, exact: true },
+    { name: 'Instagram',    path: '/instagram',   icon: <Camera size={20} /> },
+    { name: 'YouTube',      path: '/youtube',     icon: <PlaySquare size={20} /> },
+    { name: 'Conteúdo',     path: '/content',     icon: <Video size={20} /> },
+    { name: 'Concorrentes', path: '/competitors', icon: <Users size={20} /> },
+  ];
+
+  const closeNav = () => setOpen(false);
 
   return (
     <>
-      <aside className="sidebar">
+      {/* Backdrop */}
+      {open && <div className="sidebar-backdrop" onClick={closeNav} />}
+
+      <aside className={cn('sidebar', open && 'open')}>
         <div className="sidebar-logo">
           <div className="sidebar-logo-icon">PH</div>
           <h1>PartnerHub</h1>
+          <button className="sidebar-close-btn" onClick={closeNav} aria-label="Fechar menu">
+            <X size={18} />
+          </button>
         </div>
 
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', flex: 1, overflowY: 'auto' }}>
@@ -51,6 +68,7 @@ export function Sidebar({ onLogout }: { onLogout: () => void }) {
                     to={item.path}
                     end={item.exact}
                     className={({ isActive }) => cn('nav-link', isActive && 'active')}
+                    onClick={closeNav}
                   >
                     {item.icon}
                     {item.name}
@@ -61,7 +79,6 @@ export function Sidebar({ onLogout }: { onLogout: () => void }) {
           ))}
         </nav>
 
-        {/* Footer */}
         <div style={{ paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           <button
             onClick={onLogout}
@@ -78,17 +95,21 @@ export function Sidebar({ onLogout }: { onLogout: () => void }) {
       </aside>
 
       <nav className="mobile-nav">
-        {allItems.slice(0, 5).map(item => (
+        {bottomNavItems.map(item => (
           <NavLink
             key={item.path}
             to={item.path}
             end={item.exact}
             className={({ isActive }) => cn('mobile-nav-link', isActive && 'active')}
           >
-            {React.cloneElement(item.icon as React.ReactElement, { size: 20 })}
-            <span>{item.name.split('/')[0].trim()}</span>
+            {item.icon}
+            <span>{item.name}</span>
           </NavLink>
         ))}
+        <button className="mobile-nav-link mobile-menu-btn" onClick={() => setOpen(true)}>
+          <Menu size={20} />
+          <span>Menu</span>
+        </button>
       </nav>
     </>
   );

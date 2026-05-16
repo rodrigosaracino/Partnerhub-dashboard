@@ -229,7 +229,8 @@ function CompetitorVideoModal({ video, platform, onClose }: { video: VideoItem |
       onClick={onClose}
     >
       <div
-        style={{ backgroundColor: '#0f0f11', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '1.25rem', width: '100%', maxWidth: '860px', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 30px 80px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.04)', position: 'relative', padding: '1.75rem', display: 'flex', gap: '2rem' }}
+        className="video-modal-panel"
+        style={{ backgroundColor: '#0f0f11', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '1.25rem', width: '100%', maxWidth: '860px', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 30px 80px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.04)', position: 'relative', padding: '1.75rem' }}
         onClick={e => e.stopPropagation()}
       >
         {/* Close */}
@@ -241,7 +242,7 @@ function CompetitorVideoModal({ video, platform, onClose }: { video: VideoItem |
         </button>
 
         {/* Left: thumbnail + link */}
-        <div style={{ flex: '0 0 320px', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div className="video-modal-left">
           <div style={{ position: 'relative', borderRadius: '0.875rem', overflow: 'hidden', background: '#1a1a1e', aspectRatio: '16/9', border: '1px solid rgba(255,255,255,0.08)' }}>
             <img src={video.thumbnail} alt={video.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
             {platform === 'youtube' && video.duration && (
@@ -262,7 +263,7 @@ function CompetitorVideoModal({ video, platform, onClose }: { video: VideoItem |
         </div>
 
         {/* Right: details */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: 0, paddingRight: '2rem' }}>
+        <div className="video-modal-right">
           <div>
             <h2 style={{ fontSize: '1.1rem', fontWeight: 700, lineHeight: 1.4, marginBottom: '0.5rem' }}>{video.title}</h2>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>

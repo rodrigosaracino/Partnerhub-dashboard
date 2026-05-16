@@ -149,7 +149,7 @@ export function VideoDetailsModal({ video, onClose }: Props) {
 
   return createPortal(
     <div style={s.overlay} onClick={onClose}>
-      <div style={s.panel} onClick={e => e.stopPropagation()}>
+      <div style={s.panel} className="video-modal-panel" onClick={e => e.stopPropagation()}>
         {/* Close */}
         <button style={s.closeBtn} onClick={onClose}
           onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#fff'; (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.12)'; }}
@@ -159,7 +159,7 @@ export function VideoDetailsModal({ video, onClose }: Props) {
         </button>
 
         {/* ── Left Column: Thumbnail + Metrics ─────────────────────────── */}
-        <div style={{ flex: '0 0 340px', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div className="video-modal-left">
           {/* Thumbnail */}
           <div style={{ position: 'relative', borderRadius: '0.875rem', overflow: 'hidden', background: '#1a1a1e', aspectRatio: '16/9', border: '1px solid rgba(255,255,255,0.08)' }}>
             {video.youtube_id ? (
@@ -216,7 +216,7 @@ export function VideoDetailsModal({ video, onClose }: Props) {
         </div>
 
         {/* ── Right Column: Strategy Details ──────────────────────────── */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: 0, paddingRight: '2rem' }}>
+        <div className="video-modal-right">
           {/* Title + Badges */}
           <div>
             <h2 style={{ fontSize: '1.1rem', fontWeight: 700, lineHeight: 1.4, marginBottom: '0.75rem' }}>
