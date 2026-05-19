@@ -829,6 +829,41 @@ router.get('/subscribers/counts', (req, res) => {
   } catch (e) { return err(res, e.message); }
 });
 
+// ── 6.3 Broadcast ─────────────────────────────────────────────
+router.post('/flows/:id/broadcast', (req, res) => {
+  try {
+    const { message, image_url } = req.body;
+    if (!message && !image_url) return err(res, 'message ou image_url obrigatório', 400);
+
+    const flow = db.prepare('SELECT * FROM flows WHERE id=?').get(req.params.id);
+    if (!flow) return err(res, 'Flow não encontrado', 404);
+
+    const subs = db.prepare("SELECT sender_id FROM subscribers WHERE flow_id=? AND status='active'").all(req.params.id);
+    if (subs.length === 0) return ok(res, { sent: 0, errors: 0, total: 0 });
+
+    setImmediate(async () => {
+      let sent = 0, errors = 0;
+      for (const sub of subs) {
+        try {
+          const payload = image_url
+            ? { attachment: { type: 'image', payload: { url: image_url, is_reusable: true } } }
+            : { text: message };
+          const d = await sendDM(sub.sender_id, payload);
+          if (d.error) { errors++; console.error('[Broadcast]', d.error.message); }
+          else {
+            sent++;
+            if (image_url && message) await sendDM(sub.sender_id, { text: message });
+          }
+          await sleep(250);
+        } catch (e) { errors++; }
+      }
+      console.log(`[Broadcast] Flow ${req.params.id}: ${sent}/${subs.length} enviados, ${errors} erros`);
+    });
+
+    return ok(res, { total: subs.length, status: 'processing' });
+  } catch (e) { return err(res, e.message); }
+});
+
 // ── 7. Sync YouTube All (sob demanda) ────────────────────────
 router.post('/sync-youtube-all', async (req, res) => {
   try {
@@ -1626,33 +1661,49 @@ function saveSubscriber(senderId, flowId) {
   db.prepare('INSERT OR IGNORE INTO subscribers (sender_id, flow_id) VALUES (?,?)').run(senderId, flowId);
 }
 
-async function sendStep(step, senderId, flowId, stepIndex) {
-  if (step.delay_seconds > 0) await sleep(step.delay_seconds * 1000);
+async function sendDM(senderId, msgPayload) {
   const pageToken = process.env.META_PAGE_TOKEN || process.env.META_ACCESS_TOKEN;
   const pageId    = process.env.META_PAGE_ID;
-  const endpoint  = `https://graph.facebook.com/v19.0/${pageId}/messages`;
+  const r = await fetch(`https://graph.facebook.com/v19.0/${pageId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recipient: { id: senderId }, message: msgPayload, access_token: pageToken }),
+  });
+  return r.json();
+}
 
-  const qrButtons = (step.buttons || []).filter(b => b.type === 'quick_reply');
+async function sendStep(step, senderId, flowId, stepIndex) {
+  if (step.delay_seconds > 0) await sleep(step.delay_seconds * 1000);
+
+  // ── Imagem ────────────────────────────────────────────────────
+  if (step.type === 'image') {
+    if (!step.image_url) return;
+    const d = await sendDM(senderId, {
+      attachment: { type: 'image', payload: { url: step.image_url, is_reusable: true } },
+    });
+    if (d.error) throw new Error(d.error.message);
+    if (step.text) {
+      const d2 = await sendDM(senderId, { text: step.text });
+      if (d2.error) console.warn('[Webhook] Erro ao enviar legenda:', d2.error.message);
+    }
+    return;
+  }
+
+  // ── DM ────────────────────────────────────────────────────────
+  const qrButtons  = (step.buttons || []).filter(b => b.type === 'quick_reply');
   const urlButtons = (step.buttons || []).filter(b => b.type === 'url');
-
   let messagePayload;
 
   if (qrButtons.length > 0) {
-    // Salva pending para processar quando o usuário clicar
     for (const btn of qrButtons) {
       const payload = btn.payload || `QR_${flowId}_${stepIndex}_${btn.id}`;
       btn.payload = payload;
-      db.prepare(`INSERT OR REPLACE INTO flow_pending (sender_id, payload, flow_id, next_step_index)
-        VALUES (?,?,?,?)`)
+      db.prepare(`INSERT OR REPLACE INTO flow_pending (sender_id, payload, flow_id, next_step_index) VALUES (?,?,?,?)`)
         .run(senderId, payload, flowId, stepIndex + 1);
     }
     messagePayload = {
       text: step.text,
-      quick_replies: qrButtons.map(b => ({
-        content_type: 'text',
-        title: b.title.slice(0, 20),
-        payload: b.payload,
-      })),
+      quick_replies: qrButtons.map(b => ({ content_type: 'text', title: b.title.slice(0, 20), payload: b.payload })),
     };
   } else if (urlButtons.length > 0) {
     messagePayload = {
@@ -1661,9 +1712,7 @@ async function sendStep(step, senderId, flowId, stepIndex) {
         payload: {
           template_type: 'button',
           text: step.text,
-          buttons: urlButtons.slice(0, 3).map(b => ({
-            type: 'web_url', url: b.url, title: b.title.slice(0, 20),
-          })),
+          buttons: urlButtons.slice(0, 3).map(b => ({ type: 'web_url', url: b.url, title: b.title.slice(0, 20) })),
         },
       },
     };
@@ -1671,31 +1720,44 @@ async function sendStep(step, senderId, flowId, stepIndex) {
     messagePayload = { text: step.text };
   }
 
-  const r = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ recipient: { id: senderId }, message: messagePayload, access_token: pageToken }),
-  });
-  const d = await r.json();
-
-  // Fallback para texto simples se template falhar
+  const d = await sendDM(senderId, messagePayload);
   if (d.error && urlButtons.length > 0) {
     const fallback = step.text + '\n\n' + urlButtons.map(b => `${b.title}: ${b.url}`).join('\n');
-    await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipient: { id: senderId }, message: { text: fallback }, access_token: pageToken }),
-    });
+    await sendDM(senderId, { text: fallback });
   } else if (d.error) {
     throw new Error(d.error.message);
   }
 }
 
+// Executa steps de um fluxo a partir de startIndex, suportando todos os tipos
+async function executeSteps(steps, startIndex, { senderId, flowId, commentId, token }) {
+  for (let i = startIndex; i < steps.length; i++) {
+    const step = steps[i];
+
+    if (step.type === 'comment_reply') {
+      if (!commentId || !token) continue;
+      const rc = await fetch(`https://graph.facebook.com/v19.0/${commentId}/replies`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: step.text, access_token: token }),
+      });
+      const dc = await rc.json();
+      if (dc.error) console.error('[Webhook] Erro reply comentário:', dc.error.message);
+    } else if (step.type === 'wait') {
+      if (step.delay_seconds > 0) await sleep(step.delay_seconds * 1000);
+    } else if (step.type === 'dm' || step.type === 'image') {
+      await sendStep(step, senderId, flowId, i);
+      if (step.type === 'dm') {
+        const hasQR = (step.buttons || []).some(b => b.type === 'quick_reply');
+        if (hasQR) break;
+      }
+    }
+  }
+}
+
 async function processWebhookEvent(body) {
-  const token     = process.env.META_ACCESS_TOKEN;
-  const pageToken = process.env.META_PAGE_TOKEN || token;
-  const pageId    = process.env.META_PAGE_ID;
-  const myIgId    = process.env.META_IG_ACCOUNT_ID;
+  const token  = process.env.META_ACCESS_TOKEN;
+  const myIgId = process.env.META_IG_ACCOUNT_ID;
 
   for (const entry of (body?.entry || [])) {
     // ── Comentários ──────────────────────────────────────────
@@ -1720,22 +1782,7 @@ async function processWebhookEvent(body) {
         } else {
           try {
             recordCooldown(senderId, flow.id);
-            for (let i = 0; i < flow.steps.length; i++) {
-              const step = flow.steps[i];
-              if (step.type === 'comment_reply') {
-                const rc = await fetch(`https://graph.facebook.com/v19.0/${commentId}/replies`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ message: step.text, access_token: token }),
-                });
-                const dc = await rc.json();
-                if (dc.error) console.error('[Webhook] Erro reply comentário:', dc.error.message);
-              } else if (step.type === 'dm') {
-                await sendStep(step, senderId, flow.id, i);
-                const hasQR = (step.buttons || []).some(b => b.type === 'quick_reply');
-                if (hasQR) break; // aguarda opt-in do usuário
-              }
-            }
+            await executeSteps(flow.steps, 0, { senderId, flowId: flow.id, commentId, token });
             replied = 1;
             console.log(`[Webhook] Flow "${flow.name}" executado para ${senderId}`);
           } catch (e) {
@@ -1767,14 +1814,7 @@ async function processWebhookEvent(body) {
             try {
               saveSubscriber(senderId, pending.flow_id);
               db.prepare('DELETE FROM flow_pending WHERE sender_id=? AND payload=?').run(senderId, qrPayload);
-              for (let i = pending.next_step_index; i < flow.steps.length; i++) {
-                const step = flow.steps[i];
-                if (step.type === 'dm') {
-                  await sendStep(step, senderId, flow.id, i);
-                  const hasQR = (step.buttons || []).some(b => b.type === 'quick_reply');
-                  if (hasQR) break;
-                }
-              }
+              await executeSteps(flow.steps, pending.next_step_index, { senderId, flowId: flow.id, commentId: null, token: null });
               console.log(`[Webhook] Continuação de flow para ${senderId} após opt-in`);
             } catch (e) {
               console.error('[Webhook] Erro ao continuar flow:', e.message);
@@ -1794,14 +1834,7 @@ async function processWebhookEvent(body) {
         } else {
           try {
             recordCooldown(senderId, flow.id);
-            for (let i = 0; i < flow.steps.length; i++) {
-              const step = flow.steps[i];
-              if (step.type === 'dm') {
-                await sendStep(step, senderId, flow.id, i);
-                const hasQR = (step.buttons || []).some(b => b.type === 'quick_reply');
-                if (hasQR) break;
-              }
-            }
+            await executeSteps(flow.steps, 0, { senderId, flowId: flow.id, commentId: null, token: null });
             replied = 1;
           } catch (e) {
             logError = e.message;
