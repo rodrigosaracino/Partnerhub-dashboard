@@ -8,7 +8,7 @@ import {
   Plus, Trash2, Power, MessageCircle, Send, Link2, MousePointerClick,
   ArrowDown, ChevronRight, Pencil, X, GripVertical, CheckCircle2,
   Zap, AlertTriangle, Clock, Users, Activity, Timer, Image, Eye,
-  Megaphone, Loader2,
+  Megaphone, Loader2, Copy, BarChart2, TrendingUp,
 } from 'lucide-react';
 
 // ── Tipos ──────────────────────────────────────────────────────
@@ -69,6 +69,14 @@ interface Subscriber {
 interface SubscriberCount {
   flow_id: string;
   total: number;
+}
+
+interface FlowStats {
+  total_triggers: number;
+  triggers_last7d: number;
+  total_subscribers: number;
+  conversion_rate: number;
+  daily: { day: string; count: number }[];
 }
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -146,6 +154,7 @@ export function Automations() {
   const [isNew, setIsNew] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('flows');
   const [broadcastFlow, setBroadcastFlow] = useState<Flow | null>(null);
+  const [statsFlow, setStatsFlow] = useState<Flow | null>(null);
 
   const countFor = (flowId: string) => subscriberCounts.find(c => c.flow_id === flowId)?.total ?? 0;
 
@@ -174,6 +183,11 @@ export function Automations() {
   const deleteFlow = async (id: string) => {
     if (!confirm('Excluir este fluxo?')) return;
     await authFetch(`${API}/flows/${id}`, { method: 'DELETE' });
+    await mutate(`${API}/flows`);
+  };
+
+  const duplicateFlow = async (id: string) => {
+    await authFetch(`${API}/flows/${id}/duplicate`, { method: 'POST' });
     await mutate(`${API}/flows`);
   };
 
@@ -228,6 +242,8 @@ export function Automations() {
                 onToggle={toggleFlow}
                 onDelete={deleteFlow}
                 onBroadcast={() => setBroadcastFlow(f)}
+                onDuplicate={() => duplicateFlow(f.id)}
+                onStats={() => setStatsFlow(f)}
               />
             ))}
           </div>
@@ -244,6 +260,92 @@ export function Automations() {
           onClose={() => setBroadcastFlow(null)}
         />
       )}
+      {statsFlow && (
+        <StatsModal flow={statsFlow} onClose={() => setStatsFlow(null)} />
+      )}
+    </div>
+  );
+}
+
+// ── Modal de Analytics ─────────────────────────────────────────
+
+function StatsModal({ flow, onClose }: { flow: Flow; onClose: () => void }) {
+  const { data: stats, isLoading } = useSWR<FlowStats>(`${API}/flows/${flow.id}/stats`);
+
+  const maxCount = Math.max(...(stats?.daily.map(d => d.count) ?? [1]), 1);
+  const keywords = flow.trigger_keyword.split(',').map(k => k.trim()).filter(Boolean);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="glass-panel rounded-2xl w-full max-w-lg p-6 flex flex-col gap-5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BarChart2 size={18} className="text-blue-400" />
+            <div>
+              <h2 className="font-bold">{flow.name || `Fluxo "${flow.trigger_keyword}"`}</h2>
+              <p className="text-xs text-muted">Analytics dos últimos 14 dias</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-muted hover:text-white transition-colors p-1"><X size={18} /></button>
+        </div>
+
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 size={20} className="animate-spin text-muted" />
+          </div>
+        ) : stats ? (
+          <>
+            {/* KPIs */}
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { label: 'Total disparos', value: stats.total_triggers, sub: `${stats.triggers_last7d} últimos 7d`, color: 'text-blue-400' },
+                { label: 'Subscribers', value: stats.total_subscribers, sub: 'opt-ins ativos', color: 'text-emerald-400' },
+                { label: 'Conversão', value: `${stats.conversion_rate}%`, sub: 'disparo → opt-in', color: 'text-purple-400' },
+              ].map(kpi => (
+                <div key={kpi.label} className="rounded-xl bg-white/5 border border-white/10 p-3 text-center">
+                  <p className={`text-2xl font-bold ${kpi.color}`}>{kpi.value}</p>
+                  <p className="text-xs font-medium mt-0.5">{kpi.label}</p>
+                  <p className="text-[11px] text-muted mt-0.5">{kpi.sub}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Mini bar chart */}
+            {stats.daily.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <p className="text-xs text-muted font-medium">Disparos por dia</p>
+                <div className="flex items-end gap-1 h-16">
+                  {stats.daily.map(d => (
+                    <div key={d.day} className="flex-1 flex flex-col items-center gap-1 group relative">
+                      <div
+                        className="w-full bg-blue-500/40 hover:bg-blue-500/70 rounded-sm transition-colors cursor-default"
+                        style={{ height: `${Math.max(4, (d.count / maxCount) * 52)}px` }}
+                        title={`${d.day}: ${d.count}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div className="flex justify-between text-[10px] text-muted">
+                  <span>{stats.daily[0]?.day?.slice(5)}</span>
+                  <span>{stats.daily[stats.daily.length - 1]?.day?.slice(5)}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Keywords */}
+            <div className="flex flex-col gap-1.5">
+              <p className="text-xs text-muted font-medium">Keywords ({keywords.length})</p>
+              <div className="flex flex-wrap gap-1.5">
+                {keywords.map(k => (
+                  <code key={k} className="bg-yellow-500/10 text-yellow-300 border border-yellow-500/20 px-2 py-0.5 rounded text-xs font-mono">"{k}"</code>
+                ))}
+              </div>
+            </div>
+          </>
+        ) : (
+          <p className="text-muted text-center py-8">Sem dados ainda. O flow precisa ter sido disparado ao menos uma vez.</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -565,16 +667,20 @@ function SubscribersTab() {
 
 // ── Card do Fluxo na listagem ──────────────────────────────────
 
-function FlowCard({ flow, subscriberCount, onEdit, onToggle, onDelete, onBroadcast }: {
+function FlowCard({ flow, subscriberCount, onEdit, onToggle, onDelete, onBroadcast, onDuplicate, onStats }: {
   flow: Flow;
   subscriberCount: number;
   onEdit: (f: Flow) => void;
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
   onBroadcast: () => void;
+  onDuplicate: () => void;
+  onStats: () => void;
 }) {
+  const { data: stats } = useSWR<FlowStats>(`${API}/flows/${flow.id}/stats`);
   const steps = flow.steps || [];
   const cooldownLabel = COOLDOWN_OPTIONS.find(o => o.value === (flow.cooldown_hours ?? 24))?.label ?? `${flow.cooldown_hours}h`;
+  const keywords = flow.trigger_keyword.split(',').map(k => k.trim()).filter(Boolean);
 
   return (
     <div className={`glass-panel rounded-xl border-l-4 p-5 ${flow.active ? 'border-[var(--success)]' : 'border-gray-600'}`}>
@@ -584,16 +690,32 @@ function FlowCard({ flow, subscriberCount, onEdit, onToggle, onDelete, onBroadca
             <Badge variant={flow.active ? 'success' : 'neutral'}>{flow.active ? 'Ativo' : 'Pausado'}</Badge>
             <span className="font-semibold text-sm truncate">{flow.name || '(sem nome)'}</span>
           </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <div className="flex items-center gap-1.5 text-xs text-muted">
-              <Zap size={12} className="text-yellow-400" />
-              <code className="bg-white/10 px-1.5 py-0.5 rounded font-mono text-[var(--accent-primary)]">"{flow.trigger_keyword}"</code>
-            </div>
+          <div className="flex items-center gap-2 flex-wrap mt-1">
+            <Zap size={11} className="text-yellow-400 shrink-0" />
+            {keywords.map(k => (
+              <code key={k} className="bg-yellow-500/10 text-yellow-300 border border-yellow-500/20 px-1.5 py-0.5 rounded text-xs font-mono">"{k}"</code>
+            ))}
+          </div>
+          <div className="flex items-center gap-3 flex-wrap mt-1.5">
+            {(stats?.total_triggers ?? 0) > 0 && (
+              <div className="flex items-center gap-1 text-xs text-muted">
+                <TrendingUp size={11} className="text-blue-400" />
+                <span className="text-blue-400 font-semibold">{stats!.total_triggers}</span>
+                <span>disparos</span>
+              </div>
+            )}
             {subscriberCount > 0 && (
               <div className="flex items-center gap-1 text-xs text-muted">
                 <Users size={11} className="text-emerald-400" />
                 <span className="text-emerald-400 font-semibold">{subscriberCount}</span>
-                <span>sub{subscriberCount !== 1 ? 's' : ''}</span>
+                <span>subs</span>
+              </div>
+            )}
+            {(stats?.conversion_rate ?? 0) > 0 && (
+              <div className="flex items-center gap-1 text-xs text-muted">
+                <BarChart2 size={11} className="text-purple-400" />
+                <span className="text-purple-400 font-semibold">{stats!.conversion_rate}%</span>
+                <span>conversão</span>
               </div>
             )}
             <div className="flex items-center gap-1 text-xs text-muted">
@@ -603,6 +725,9 @@ function FlowCard({ flow, subscriberCount, onEdit, onToggle, onDelete, onBroadca
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
+          <button onClick={onStats} className="p-2 rounded-lg text-muted hover:text-blue-400 hover:bg-white/5 transition-colors" title="Analytics">
+            <BarChart2 size={15} />
+          </button>
           {subscriberCount > 0 && (
             <button onClick={onBroadcast} className="p-2 rounded-lg text-muted hover:text-[var(--accent-primary)] hover:bg-white/5 transition-colors" title="Broadcast">
               <Megaphone size={15} />
@@ -610,6 +735,9 @@ function FlowCard({ flow, subscriberCount, onEdit, onToggle, onDelete, onBroadca
           )}
           <button onClick={() => onEdit(flow)} className="p-2 rounded-lg text-muted hover:text-white hover:bg-white/5 transition-colors" title="Editar">
             <Pencil size={15} />
+          </button>
+          <button onClick={onDuplicate} className="p-2 rounded-lg text-muted hover:text-white hover:bg-white/5 transition-colors" title="Duplicar">
+            <Copy size={15} />
           </button>
           <button onClick={() => onToggle(flow.id)} className="p-2 rounded-lg text-muted hover:text-white hover:bg-white/5 transition-colors" title={flow.active ? 'Pausar' : 'Ativar'}>
             <Power size={15} className={flow.active ? 'text-[var(--success)]' : ''} />
@@ -623,7 +751,10 @@ function FlowCard({ flow, subscriberCount, onEdit, onToggle, onDelete, onBroadca
       {/* Mini flow preview */}
       <div className="flex items-center gap-1.5 flex-wrap">
         <div className="flex items-center gap-1 text-xs bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 px-2 py-1 rounded-lg">
-          <Zap size={11} /><span>"{flow.trigger_keyword}"</span>
+          <Zap size={11} />
+          {keywords.length > 1
+            ? <span>{keywords.length} keywords</span>
+            : <span>"{keywords[0] || flow.trigger_keyword}"</span>}
         </div>
         {steps.map(step => (
           <React.Fragment key={step.id}>
@@ -662,8 +793,29 @@ function FlowEditor({ flow: initial, isNew, onSave, onCancel }: {
   const [saving, setSaving] = useState(false);
   const [addingStep, setAddingStep] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [kwInput, setKwInput] = useState('');
 
   const updateFlow = (patch: Partial<Flow>) => setFlow(f => ({ ...f, ...patch }));
+
+  const keywords = flow.trigger_keyword.split(',').map(k => k.trim()).filter(Boolean);
+
+  const addKeyword = (raw: string) => {
+    const kw = raw.trim().toUpperCase();
+    if (!kw || keywords.includes(kw)) return;
+    const joined = [...keywords, kw].join(', ');
+    updateFlow({ trigger_keyword: joined });
+    setKwInput('');
+  };
+
+  const removeKeyword = (kw: string) => {
+    const remaining = keywords.filter(k => k !== kw).join(', ');
+    updateFlow({ trigger_keyword: remaining });
+  };
+
+  const handleKwKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addKeyword(kwInput); }
+    if (e.key === 'Backspace' && !kwInput && keywords.length > 0) removeKeyword(keywords[keywords.length - 1]);
+  };
 
   const addStep = (type: StepType) => {
     const step: FlowStep = { id: uid(), type, text: '', buttons: [], delay_seconds: 0, image_url: '' };
@@ -693,7 +845,7 @@ function FlowEditor({ flow: initial, isNew, onSave, onCancel }: {
     setSaving(false);
   };
 
-  const valid = flow.trigger_keyword.trim() && flow.steps.length > 0 &&
+  const valid = keywords.length > 0 && flow.steps.length > 0 &&
     flow.steps.every(s => {
       if (s.type === 'wait') return (s.delay_seconds ?? 0) > 0;
       if (s.type === 'image') return !!(s.image_url?.trim());
@@ -735,13 +887,36 @@ function FlowEditor({ flow: initial, isNew, onSave, onCancel }: {
                 value={flow.name}
                 onChange={e => updateFlow({ name: e.target.value })}
               />
-              <Input
-                label="Palavra-chave gatilho"
-                placeholder='Ex: "QUERO", "LINK", "INFO"'
-                value={flow.trigger_keyword}
-                onChange={e => updateFlow({ trigger_keyword: e.target.value })}
-                autoFocus={isNew}
-              />
+              {/* Input de múltiplas keywords */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-medium text-muted flex items-center gap-1.5">
+                  <Zap size={11} className="text-yellow-400" /> Palavras-chave gatilho
+                </label>
+                <div
+                  className="input-field min-h-[38px] flex flex-wrap gap-1.5 px-2 py-1.5 cursor-text"
+                  onClick={() => document.getElementById('kw-input')?.focus()}
+                >
+                  {keywords.map(kw => (
+                    <span key={kw} className="flex items-center gap-1 bg-yellow-500/15 text-yellow-300 border border-yellow-500/25 rounded-md px-1.5 py-0.5 text-xs font-mono">
+                      {kw}
+                      <button type="button" onClick={() => removeKeyword(kw)} className="hover:text-red-400 transition-colors ml-0.5">
+                        <X size={10} />
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    id="kw-input"
+                    className="bg-transparent outline-none text-sm min-w-[80px] flex-1 placeholder:text-white/20"
+                    placeholder={keywords.length === 0 ? 'QUERO, LINK, INFO...' : '+keyword'}
+                    value={kwInput}
+                    onChange={e => setKwInput(e.target.value.toUpperCase())}
+                    onKeyDown={handleKwKeyDown}
+                    onBlur={() => kwInput && addKeyword(kwInput)}
+                    autoFocus={isNew}
+                  />
+                </div>
+                <p className="text-[11px] text-muted">Enter ou vírgula para adicionar · Backspace para remover</p>
+              </div>
             </div>
 
             {/* Cooldown */}
@@ -766,11 +941,17 @@ function FlowEditor({ flow: initial, isNew, onSave, onCancel }: {
               </div>
             </div>
 
-            {flow.trigger_keyword && (
-              <p className="text-xs text-muted flex items-center gap-1.5">
-                <Zap size={12} className="text-yellow-400" />
+            {keywords.length > 0 && (
+              <p className="text-xs text-muted flex items-center gap-1.5 flex-wrap">
+                <Zap size={12} className="text-yellow-400 shrink-0" />
                 Dispara quando alguém comentar algo contendo{' '}
-                <code className="bg-white/10 px-1 rounded">"{flow.trigger_keyword}"</code>
+                {keywords.map((k, i) => (
+                  <React.Fragment key={k}>
+                    <code className="bg-white/10 px-1 rounded">"{k}"</code>
+                    {i < keywords.length - 2 && <span>, </span>}
+                    {i === keywords.length - 2 && <span> ou </span>}
+                  </React.Fragment>
+                ))}
               </p>
             )}
           </div>
@@ -882,7 +1063,12 @@ function FlowPreview({ flow }: { flow: Flow }) {
           <Zap size={12} className="text-yellow-400" />
         </div>
         <div className="rounded-xl rounded-tl-sm bg-white/10 px-3 py-2 text-xs flex-1">
-          Alguém comenta <strong>"{flow.trigger_keyword || '...'}"</strong>
+          {(() => {
+            const kws = flow.trigger_keyword.split(',').map(k => k.trim()).filter(Boolean);
+            if (kws.length === 0) return <span>...</span>;
+            if (kws.length === 1) return <>Alguém comenta <strong>"{kws[0]}"</strong></>;
+            return <>Alguém comenta <strong>"{kws[0]}"</strong> <span className="text-muted">ou +{kws.length - 1} keywords</span></>;
+          })()}
         </div>
       </div>
 

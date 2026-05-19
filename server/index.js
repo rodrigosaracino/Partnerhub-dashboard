@@ -89,6 +89,7 @@ for (const m of [
   'ALTER TABLE flows ADD COLUMN cooldown_hours INTEGER DEFAULT 24',
   'ALTER TABLE subscribers ADD COLUMN name TEXT',
   'ALTER TABLE subscribers ADD COLUMN profile_pic TEXT',
+  'ALTER TABLE webhook_log ADD COLUMN flow_id TEXT',
 ]) {
   try { db.exec(m); } catch {}
 }
@@ -794,6 +795,52 @@ router.delete('/flows/:id', (req, res) => {
   try {
     db.prepare('DELETE FROM flows WHERE id=?').run(req.params.id);
     return ok(res, { success: true });
+  } catch (e) { return err(res, e.message); }
+});
+
+router.post('/flows/:id/duplicate', (req, res) => {
+  try {
+    const flow = db.prepare('SELECT * FROM flows WHERE id=?').get(req.params.id);
+    if (!flow) return err(res, 'Flow não encontrado', 404);
+    const newId = Math.random().toString(36).slice(2, 9);
+    db.prepare('INSERT INTO flows (id, name, trigger_keyword, steps, active, cooldown_hours) VALUES (?,?,?,?,0,?)')
+      .run(newId, `${flow.name} (cópia)`, flow.trigger_keyword, flow.steps, flow.cooldown_hours ?? 24);
+    return ok(res, { id: newId });
+  } catch (e) { return err(res, e.message); }
+});
+
+router.get('/flows/:id/stats', (req, res) => {
+  try {
+    const flow = db.prepare('SELECT * FROM flows WHERE id=?').get(req.params.id);
+    if (!flow) return err(res, 'Flow não encontrado', 404);
+
+    const triggers = db.prepare(`
+      SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN received_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END) as last7d
+      FROM webhook_log WHERE flow_id=? AND replied=1
+    `).get(req.params.id);
+
+    const subs = db.prepare("SELECT COUNT(*) as total FROM subscribers WHERE flow_id=? AND status='active'").get(req.params.id);
+
+    const daily = db.prepare(`
+      SELECT date(received_at) as day, COUNT(*) as count
+      FROM webhook_log
+      WHERE flow_id=? AND replied=1 AND received_at >= datetime('now', '-14 days')
+      GROUP BY day ORDER BY day ASC
+    `).all(req.params.id);
+
+    const convRate = (triggers?.total || 0) > 0
+      ? Math.round(((subs?.total || 0) / triggers.total) * 100)
+      : 0;
+
+    return ok(res, {
+      total_triggers: triggers?.total || 0,
+      triggers_last7d: triggers?.last7d || 0,
+      total_subscribers: subs?.total || 0,
+      conversion_rate: convRate,
+      daily,
+    });
   } catch (e) { return err(res, e.message); }
 });
 
@@ -1664,9 +1711,12 @@ app.post('/api/webhook/instagram', (req, res) => {
 function matchFlow(text) {
   const flows = db.prepare("SELECT * FROM flows WHERE active = 1").all();
   const lower = text.toLowerCase();
-  const flow  = flows.find(f => lower.includes(f.trigger_keyword.toLowerCase()));
-  if (!flow) return null;
-  return { ...flow, steps: JSON.parse(flow.steps || '[]') };
+  for (const f of flows) {
+    const keywords = f.trigger_keyword.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
+    const hit = keywords.find(k => lower.includes(k));
+    if (hit) return { ...f, steps: JSON.parse(f.steps || '[]'), matched_keyword: hit };
+  }
+  return null;
 }
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -1831,8 +1881,8 @@ async function processWebhookEvent(body) {
         }
       }
 
-      db.prepare('INSERT INTO webhook_log (event_type, sender_id, content, rule_matched, replied, error) VALUES (?,?,?,?,?,?)')
-        .run('comment', senderId || null, commentText, flow?.trigger_keyword || null, replied, logError);
+      db.prepare('INSERT INTO webhook_log (event_type, sender_id, content, rule_matched, replied, error, flow_id) VALUES (?,?,?,?,?,?,?)')
+        .run('comment', senderId || null, commentText, flow?.matched_keyword || flow?.trigger_keyword || null, replied, logError, flow?.id || null);
     }
 
     // ── DMs / Quick Reply postbacks ───────────────────────────
@@ -1863,8 +1913,21 @@ async function processWebhookEvent(body) {
         }
       }
 
-      // DM com texto normal → tenta disparar flow
+      // DM com texto normal → verifica opt-out, depois tenta disparar flow
       if (!text) continue;
+
+      // Opt-out: palavras de cancelamento
+      const STOP_WORDS = ['stop', 'parar', 'cancelar', 'sair', 'unsubscribe', 'descadastrar'];
+      if (STOP_WORDS.includes(text.toLowerCase().trim())) {
+        db.prepare("UPDATE subscribers SET status='unsubscribed' WHERE sender_id=?").run(senderId);
+        try {
+          await sendDM(senderId, { text: 'Você foi removido da lista de mensagens automáticas. Para reativar, interaja com um post novamente. ✅' });
+        } catch {}
+        db.prepare('INSERT INTO webhook_log (event_type, sender_id, content, rule_matched, replied, error, flow_id) VALUES (?,?,?,?,?,?,?)')
+          .run('dm', senderId, text, 'OPT_OUT', 1, null, null);
+        continue;
+      }
+
       const flow = matchFlow(text);
       let replied = 0, logError = null;
       if (flow) {
@@ -1880,8 +1943,8 @@ async function processWebhookEvent(body) {
           }
         }
       }
-      db.prepare('INSERT INTO webhook_log (event_type, sender_id, content, rule_matched, replied, error) VALUES (?,?,?,?,?,?)')
-        .run('dm', senderId, text, flow?.trigger_keyword || null, replied, logError);
+      db.prepare('INSERT INTO webhook_log (event_type, sender_id, content, rule_matched, replied, error, flow_id) VALUES (?,?,?,?,?,?,?)')
+        .run('dm', senderId, text, flow?.matched_keyword || flow?.trigger_keyword || null, replied, logError, flow?.id || null);
     }
   }
 }
