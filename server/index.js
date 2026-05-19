@@ -15,6 +15,7 @@ const jwt     = require('jsonwebtoken');
 const bcrypt  = require('bcrypt');
 const { google } = require('googleapis');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const crypto = require('crypto');
 
 const PORT   = process.env.PORT || 3001;
 const DB_PATH = path.join(__dirname, 'partnerhub.db');
@@ -41,6 +42,16 @@ db.exec(schema);
 // Migrações incrementais — colunas que podem não existir em DBs antigos
 for (const m of [
   'ALTER TABLE videos ADD COLUMN transcript TEXT',
+  `CREATE TABLE IF NOT EXISTS webhook_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT,
+    sender_id TEXT,
+    content TEXT,
+    rule_matched TEXT,
+    replied INTEGER DEFAULT 0,
+    error TEXT,
+    received_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
 ]) {
   try { db.exec(m); } catch {}
 }
@@ -49,7 +60,9 @@ for (const m of [
 // ── Express ─────────────────────────────────────────────────
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({
+  verify: (req, _res, buf) => { req.rawBody = buf; },
+}));
 
 // Todas as rotas sob /api
 const router = express.Router();
@@ -706,6 +719,15 @@ router.delete('/automation-rules/:id', (req, res) => {
   try {
     db.prepare('DELETE FROM automation_rules WHERE id = ?').run(req.params.id);
     return ok(res, { success: true });
+  } catch (e) { return err(res, e.message); }
+});
+
+// ── 6.1 Webhook Log (leitura) ─────────────────────────────────
+router.get('/webhook-log', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const rows = db.prepare('SELECT * FROM webhook_log ORDER BY received_at DESC LIMIT ?').all(limit);
+    return ok(res, rows);
   } catch (e) { return err(res, e.message); }
 });
 
@@ -1442,6 +1464,125 @@ app.post('/api/backfill', requireAuth, async (req, res) => {
   backfillYouTube().catch(e => console.error('[backfill YT]', e.message));
   backfillInstagram().catch(e => console.error('[backfill IG]', e.message));
 });
+
+// ── Instagram Webhook (público) ───────────────────────────────
+
+// GET — verificação solicitada pela Meta ao cadastrar o callback
+app.get('/api/webhook/instagram', (req, res) => {
+  const mode      = req.query['hub.mode'];
+  const token     = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  if (mode === 'subscribe' && token === process.env.META_WEBHOOK_VERIFY_TOKEN) {
+    console.log('[Webhook] Verificação Meta concluída');
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+// POST — recebe eventos de comentários e DMs
+app.post('/api/webhook/instagram', (req, res) => {
+  const appSecret = process.env.META_APP_SECRET;
+  if (appSecret) {
+    const sig = req.headers['x-hub-signature-256'];
+    if (!sig) {
+      console.warn('[Webhook] Requisição sem assinatura rejeitada');
+      return res.sendStatus(403);
+    }
+    const expected = 'sha256=' + crypto.createHmac('sha256', appSecret).update(req.rawBody || '').digest('hex');
+    try {
+      if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+        console.warn('[Webhook] Assinatura inválida rejeitada');
+        return res.sendStatus(403);
+      }
+    } catch {
+      return res.sendStatus(403);
+    }
+  }
+  res.sendStatus(200);
+  processWebhookEvent(req.body).catch(e => console.error('[Webhook] Erro ao processar evento:', e.message));
+});
+
+function matchRule(text) {
+  const rules = db.prepare('SELECT * FROM automation_rules WHERE active = 1').all();
+  const lower = text.toLowerCase();
+  return rules.find(r => lower.includes(r.trigger_keyword.toLowerCase())) || null;
+}
+
+async function processWebhookEvent(body) {
+  const token  = process.env.META_ACCESS_TOKEN;
+  const myIgId = process.env.META_IG_ACCOUNT_ID;
+
+  for (const entry of (body?.entry || [])) {
+    // ── Comentários ─────────────────────────────────────────
+    for (const change of (entry.changes || [])) {
+      if (change.field !== 'comments') continue;
+      const val         = change.value || {};
+      const commentId   = val.id;
+      const commentText = val.text || '';
+      const senderId    = val.from?.id;
+
+      if (!commentText || !commentId || senderId === myIgId) continue;
+
+      const rule = matchRule(commentText);
+      let replied = 0, logError = null;
+
+      if (rule) {
+        try {
+          const r = await fetch(`https://graph.facebook.com/v19.0/${commentId}/replies`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: rule.response_message, access_token: token }),
+          });
+          const data = await r.json();
+          if (data.error) throw new Error(data.error.message);
+          replied = 1;
+          console.log(`[Webhook] Comentário respondido: ${commentId} | regra: "${rule.trigger_keyword}"`);
+        } catch (e) {
+          logError = e.message;
+          console.error('[Webhook] Erro ao responder comentário:', e.message);
+        }
+      }
+
+      db.prepare('INSERT INTO webhook_log (event_type, sender_id, content, rule_matched, replied, error) VALUES (?,?,?,?,?,?)')
+        .run('comment', senderId || null, commentText, rule?.trigger_keyword || null, replied, logError);
+    }
+
+    // ── Direct Messages ──────────────────────────────────────
+    for (const msg of (entry.messaging || [])) {
+      const senderId = msg.sender?.id;
+      const text     = msg.message?.text || '';
+
+      if (!text || !senderId || senderId === myIgId) continue;
+
+      const rule = matchRule(text);
+      let replied = 0, logError = null;
+
+      if (rule) {
+        try {
+          const r = await fetch(`https://graph.facebook.com/v19.0/${myIgId}/messages`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              recipient: { id: senderId },
+              message: { text: rule.response_message },
+              access_token: token,
+            }),
+          });
+          const data = await r.json();
+          if (data.error) throw new Error(data.error.message);
+          replied = 1;
+          console.log(`[Webhook] DM respondido: ${senderId} | regra: "${rule.trigger_keyword}"`);
+        } catch (e) {
+          logError = e.message;
+          console.error('[Webhook] Erro ao responder DM:', e.message);
+        }
+      }
+
+      db.prepare('INSERT INTO webhook_log (event_type, sender_id, content, rule_matched, replied, error) VALUES (?,?,?,?,?,?)')
+        .run('dm', senderId, text, rule?.trigger_keyword || null, replied, logError);
+    }
+  }
+}
 
 // Todas as rotas /api/* exigem autenticação
 app.use('/api', requireAuth, router);
