@@ -42,6 +42,9 @@ db.exec(schema);
 // Migrações incrementais — colunas que podem não existir em DBs antigos
 for (const m of [
   'ALTER TABLE videos ADD COLUMN transcript TEXT',
+  'ALTER TABLE automation_rules ADD COLUMN comment_reply TEXT',
+  'ALTER TABLE automation_rules ADD COLUMN dm_button_text TEXT',
+  'ALTER TABLE automation_rules ADD COLUMN dm_button_url TEXT',
   `CREATE TABLE IF NOT EXISTS webhook_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_type TEXT,
@@ -707,10 +710,12 @@ router.get('/automation-rules', (req, res) => {
 
 router.post('/automation-rules', (req, res) => {
   try {
-    const { id, trigger_keyword, response_message, active } = req.body;
-    db.prepare('INSERT OR REPLACE INTO automation_rules (id, trigger_keyword, response_message, active) VALUES (?,?,?,?)').run(
-      id || Math.random().toString(36).slice(7), trigger_keyword, response_message, active ?? 1
-    );
+    const { id, trigger_keyword, response_message, comment_reply, dm_button_text, dm_button_url, active } = req.body;
+    db.prepare(`INSERT OR REPLACE INTO automation_rules
+      (id, trigger_keyword, response_message, comment_reply, dm_button_text, dm_button_url, active)
+      VALUES (?,?,?,?,?,?,?)`)
+      .run(id || Math.random().toString(36).slice(7), trigger_keyword, response_message,
+        comment_reply || null, dm_button_text || null, dm_button_url || null, active ?? 1);
     return ok(res, { success: true });
   } catch (e) { return err(res, e.message); }
 });
@@ -1532,17 +1537,53 @@ async function processWebhookEvent(body) {
 
       if (rule) {
         try {
-          const r = await fetch(`https://graph.facebook.com/v19.0/${myIgId}/messages`, {
+          // 1. Reply público no comentário (se configurado)
+          if (rule.comment_reply) {
+            const rc = await fetch(`https://graph.facebook.com/v19.0/${commentId}/replies`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ message: rule.comment_reply, access_token: token }),
+            });
+            const dc = await rc.json();
+            if (dc.error) console.error('[Webhook] Erro no reply do comentário:', dc.error.message);
+          }
+
+          // 2. DM privada com texto (e botão se configurado)
+          let messagePayload;
+          if (rule.dm_button_text && rule.dm_button_url) {
+            messagePayload = {
+              attachment: {
+                type: 'template',
+                payload: {
+                  template_type: 'button',
+                  text: rule.response_message,
+                  buttons: [{ type: 'web_url', url: rule.dm_button_url, title: rule.dm_button_text }],
+                },
+              },
+            };
+          } else {
+            messagePayload = { text: rule.response_message };
+          }
+
+          const rd = await fetch(`https://graph.facebook.com/v19.0/${myIgId}/messages`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              recipient: { id: senderId },
-              message: { text: rule.response_message },
-              access_token: token,
-            }),
+            body: JSON.stringify({ recipient: { id: senderId }, message: messagePayload, access_token: token }),
           });
-          const data = await r.json();
-          if (data.error) throw new Error(data.error.message);
+          const dd = await rd.json();
+          if (dd.error) {
+            // fallback: envia só texto se o template falhar
+            if (rule.dm_button_text && rule.dm_button_url) {
+              const fallbackText = `${rule.response_message}\n\n${rule.dm_button_url}`;
+              await fetch(`https://graph.facebook.com/v19.0/${myIgId}/messages`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ recipient: { id: senderId }, message: { text: fallbackText }, access_token: token }),
+              });
+            } else {
+              throw new Error(dd.error.message);
+            }
+          }
           replied = 1;
           console.log(`[Webhook] DM enviada para ${senderId} | regra: "${rule.trigger_keyword}"`);
         } catch (e) {
