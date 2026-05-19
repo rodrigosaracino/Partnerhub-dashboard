@@ -1513,12 +1513,16 @@ async function processWebhookEvent(body) {
   const myIgId = process.env.META_IG_ACCOUNT_ID;
 
   for (const entry of (body?.entry || [])) {
-    // ── Comentários ─────────────────────────────────────────
+    // ── Comentários (Instagram: field=comments / Facebook Page: field=feed) ──
     for (const change of (entry.changes || [])) {
-      if (change.field !== 'comments') continue;
+      const isIgComment   = change.field === 'comments';
+      const isFeedComment = change.field === 'feed' && change.value?.item === 'comment' && change.value?.verb === 'add';
+      if (!isIgComment && !isFeedComment) continue;
+
       const val         = change.value || {};
-      const commentId   = val.id;
-      const commentText = val.text || '';
+      // Instagram usa val.id e val.text; feed usa val.comment_id e val.message
+      const commentId   = val.id || val.comment_id;
+      const commentText = val.text || val.message || '';
       const senderId    = val.from?.id;
 
       if (!commentText || !commentId || senderId === myIgId) continue;
