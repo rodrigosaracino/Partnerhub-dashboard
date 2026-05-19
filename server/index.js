@@ -1514,8 +1514,10 @@ function matchRule(text) {
 }
 
 async function processWebhookEvent(body) {
-  const token  = process.env.META_ACCESS_TOKEN;
-  const myIgId = process.env.META_IG_ACCOUNT_ID;
+  const token     = process.env.META_ACCESS_TOKEN;
+  const pageToken = process.env.META_PAGE_TOKEN || token;
+  const pageId    = process.env.META_PAGE_ID;
+  const myIgId    = process.env.META_IG_ACCOUNT_ID;
 
   for (const entry of (body?.entry || [])) {
     // ── Comentários (Instagram: field=comments / Facebook Page: field=feed) ──
@@ -1546,9 +1548,13 @@ async function processWebhookEvent(body) {
             });
             const dc = await rc.json();
             if (dc.error) console.error('[Webhook] Erro no reply do comentário:', dc.error.message);
+            else console.log(`[Webhook] Reply no comentário enviado: ${commentId}`);
           }
 
-          // 2. DM privada com texto (e botão se configurado)
+          // 2. DM privada via Page endpoint
+          const dmEndpoint = `https://graph.facebook.com/v19.0/${pageId}/messages`;
+          const dmToken    = pageToken;
+
           let messagePayload;
           if (rule.dm_button_text && rule.dm_button_url) {
             messagePayload = {
@@ -1565,21 +1571,23 @@ async function processWebhookEvent(body) {
             messagePayload = { text: rule.response_message };
           }
 
-          const rd = await fetch(`https://graph.facebook.com/v19.0/${myIgId}/messages`, {
+          const rd = await fetch(dmEndpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ recipient: { id: senderId }, message: messagePayload, access_token: token }),
+            body: JSON.stringify({ recipient: { id: senderId }, message: messagePayload, access_token: dmToken }),
           });
           const dd = await rd.json();
           if (dd.error) {
-            // fallback: envia só texto se o template falhar
+            // fallback: texto simples com URL se template falhar
             if (rule.dm_button_text && rule.dm_button_url) {
               const fallbackText = `${rule.response_message}\n\n${rule.dm_button_url}`;
-              await fetch(`https://graph.facebook.com/v19.0/${myIgId}/messages`, {
+              const rf = await fetch(dmEndpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ recipient: { id: senderId }, message: { text: fallbackText }, access_token: token }),
+                body: JSON.stringify({ recipient: { id: senderId }, message: { text: fallbackText }, access_token: dmToken }),
               });
+              const df = await rf.json();
+              if (df.error) throw new Error(df.error.message);
             } else {
               throw new Error(dd.error.message);
             }
