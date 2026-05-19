@@ -72,6 +72,21 @@ for (const m of [
     error TEXT,
     received_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`,
+  `CREATE TABLE IF NOT EXISTS flow_cooldown (
+    sender_id TEXT NOT NULL,
+    flow_id TEXT NOT NULL,
+    triggered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (sender_id, flow_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS subscribers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sender_id TEXT NOT NULL,
+    flow_id TEXT NOT NULL,
+    opted_in_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    status TEXT DEFAULT 'active',
+    UNIQUE(sender_id, flow_id)
+  )`,
+  'ALTER TABLE flows ADD COLUMN cooldown_hours INTEGER DEFAULT 24',
 ]) {
   try { db.exec(m); } catch {}
 }
@@ -754,11 +769,11 @@ router.get('/flows', (req, res) => {
 
 router.post('/flows', (req, res) => {
   try {
-    const { id, name, trigger_keyword, steps, active } = req.body;
+    const { id, name, trigger_keyword, steps, active, cooldown_hours } = req.body;
     const fid = id || Math.random().toString(36).slice(2, 9);
-    db.prepare(`INSERT OR REPLACE INTO flows (id, name, trigger_keyword, steps, active, updated_at)
-      VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)`)
-      .run(fid, name, trigger_keyword, JSON.stringify(steps || []), active ?? 1);
+    db.prepare(`INSERT OR REPLACE INTO flows (id, name, trigger_keyword, steps, active, cooldown_hours, updated_at)
+      VALUES (?,?,?,?,?,?,CURRENT_TIMESTAMP)`)
+      .run(fid, name, trigger_keyword, JSON.stringify(steps || []), active ?? 1, cooldown_hours ?? 24);
     return ok(res, { id: fid });
   } catch (e) { return err(res, e.message); }
 });
@@ -785,6 +800,31 @@ router.get('/webhook-log', (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
     const rows = db.prepare('SELECT * FROM webhook_log ORDER BY received_at DESC LIMIT ?').all(limit);
+    return ok(res, rows);
+  } catch (e) { return err(res, e.message); }
+});
+
+// ── 6.2 Subscribers ───────────────────────────────────────────
+router.get('/subscribers', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT s.*, f.name as flow_name, f.trigger_keyword
+      FROM subscribers s
+      LEFT JOIN flows f ON f.id = s.flow_id
+      ORDER BY s.opted_in_at DESC
+      LIMIT 500
+    `).all();
+    return ok(res, rows);
+  } catch (e) { return err(res, e.message); }
+});
+
+router.get('/subscribers/counts', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT flow_id, COUNT(*) as total
+      FROM subscribers WHERE status='active'
+      GROUP BY flow_id
+    `).all();
     return ok(res, rows);
   } catch (e) { return err(res, e.message); }
 });
@@ -1568,7 +1608,26 @@ function matchFlow(text) {
   return { ...flow, steps: JSON.parse(flow.steps || '[]') };
 }
 
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+function isInCooldown(senderId, flow) {
+  if (!flow.cooldown_hours) return false;
+  const row = db.prepare('SELECT triggered_at FROM flow_cooldown WHERE sender_id=? AND flow_id=?').get(senderId, flow.id);
+  if (!row) return false;
+  const elapsed = (Date.now() - new Date(row.triggered_at).getTime()) / 3600000;
+  return elapsed < flow.cooldown_hours;
+}
+
+function recordCooldown(senderId, flowId) {
+  db.prepare('INSERT OR REPLACE INTO flow_cooldown (sender_id, flow_id, triggered_at) VALUES (?,?,CURRENT_TIMESTAMP)').run(senderId, flowId);
+}
+
+function saveSubscriber(senderId, flowId) {
+  db.prepare('INSERT OR IGNORE INTO subscribers (sender_id, flow_id) VALUES (?,?)').run(senderId, flowId);
+}
+
 async function sendStep(step, senderId, flowId, stepIndex) {
+  if (step.delay_seconds > 0) await sleep(step.delay_seconds * 1000);
   const pageToken = process.env.META_PAGE_TOKEN || process.env.META_ACCESS_TOKEN;
   const pageId    = process.env.META_PAGE_ID;
   const endpoint  = `https://graph.facebook.com/v19.0/${pageId}/messages`;
@@ -1656,26 +1715,33 @@ async function processWebhookEvent(body) {
       let replied = 0, logError = null;
 
       if (flow) {
-        try {
-          for (let i = 0; i < flow.steps.length; i++) {
-            const step = flow.steps[i];
-            if (step.type === 'comment_reply') {
-              const rc = await fetch(`https://graph.facebook.com/v19.0/${commentId}/replies`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: step.text, access_token: token }),
-              });
-              const dc = await rc.json();
-              if (dc.error) console.error('[Webhook] Erro reply comentário:', dc.error.message);
-            } else if (step.type === 'dm') {
-              await sendStep(step, senderId, flow.id, i);
+        if (isInCooldown(senderId, flow)) {
+          console.log(`[Webhook] Cooldown ativo para ${senderId} no flow "${flow.name}" — ignorado`);
+        } else {
+          try {
+            recordCooldown(senderId, flow.id);
+            for (let i = 0; i < flow.steps.length; i++) {
+              const step = flow.steps[i];
+              if (step.type === 'comment_reply') {
+                const rc = await fetch(`https://graph.facebook.com/v19.0/${commentId}/replies`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ message: step.text, access_token: token }),
+                });
+                const dc = await rc.json();
+                if (dc.error) console.error('[Webhook] Erro reply comentário:', dc.error.message);
+              } else if (step.type === 'dm') {
+                await sendStep(step, senderId, flow.id, i);
+                const hasQR = (step.buttons || []).some(b => b.type === 'quick_reply');
+                if (hasQR) break; // aguarda opt-in do usuário
+              }
             }
+            replied = 1;
+            console.log(`[Webhook] Flow "${flow.name}" executado para ${senderId}`);
+          } catch (e) {
+            logError = e.message;
+            console.error('[Webhook] Erro ao executar flow:', e.message);
           }
-          replied = 1;
-          console.log(`[Webhook] Flow "${flow.name}" executado para ${senderId}`);
-        } catch (e) {
-          logError = e.message;
-          console.error('[Webhook] Erro ao executar flow:', e.message);
         }
       }
 
@@ -1699,11 +1765,16 @@ async function processWebhookEvent(body) {
           if (flowRow) {
             const flow = { ...flowRow, steps: JSON.parse(flowRow.steps || '[]') };
             try {
+              saveSubscriber(senderId, pending.flow_id);
+              db.prepare('DELETE FROM flow_pending WHERE sender_id=? AND payload=?').run(senderId, qrPayload);
               for (let i = pending.next_step_index; i < flow.steps.length; i++) {
                 const step = flow.steps[i];
-                if (step.type === 'dm') await sendStep(step, senderId, flow.id, i);
+                if (step.type === 'dm') {
+                  await sendStep(step, senderId, flow.id, i);
+                  const hasQR = (step.buttons || []).some(b => b.type === 'quick_reply');
+                  if (hasQR) break;
+                }
               }
-              db.prepare('DELETE FROM flow_pending WHERE sender_id=? AND payload=?').run(senderId, qrPayload);
               console.log(`[Webhook] Continuação de flow para ${senderId} após opt-in`);
             } catch (e) {
               console.error('[Webhook] Erro ao continuar flow:', e.message);
@@ -1718,14 +1789,23 @@ async function processWebhookEvent(body) {
       const flow = matchFlow(text);
       let replied = 0, logError = null;
       if (flow) {
-        try {
-          for (let i = 0; i < flow.steps.length; i++) {
-            const step = flow.steps[i];
-            if (step.type === 'dm') await sendStep(step, senderId, flow.id, i);
+        if (isInCooldown(senderId, flow)) {
+          console.log(`[Webhook] Cooldown ativo para ${senderId} no flow "${flow.name}" via DM — ignorado`);
+        } else {
+          try {
+            recordCooldown(senderId, flow.id);
+            for (let i = 0; i < flow.steps.length; i++) {
+              const step = flow.steps[i];
+              if (step.type === 'dm') {
+                await sendStep(step, senderId, flow.id, i);
+                const hasQR = (step.buttons || []).some(b => b.type === 'quick_reply');
+                if (hasQR) break;
+              }
+            }
+            replied = 1;
+          } catch (e) {
+            logError = e.message;
           }
-          replied = 1;
-        } catch (e) {
-          logError = e.message;
         }
       }
       db.prepare('INSERT INTO webhook_log (event_type, sender_id, content, rule_matched, replied, error) VALUES (?,?,?,?,?,?)')
@@ -1823,6 +1903,13 @@ async function syncAllHistoricalData() {
     }
   } catch (e) { console.error('Meta sync error:', e.message); }
 }
+
+// ── Cron: limpeza de flow_pending expirados (a cada hora) ────
+cron.schedule('0 * * * *', () => {
+  try {
+    db.prepare("DELETE FROM flow_pending WHERE datetime(created_at, '+24 hours') < datetime('now')").run();
+  } catch (e) { console.error('[CRON] Erro limpeza flow_pending:', e.message); }
+});
 
 // ── Cron: snapshot diário à meia-noite ──────────────────────
 cron.schedule('0 0 * * *', async () => {
