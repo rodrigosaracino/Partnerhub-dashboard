@@ -3,8 +3,9 @@ import useSWR, { mutate } from 'swr';
 import { Card, CardContent } from '../components/Card';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
-import { MessageSquare, Plus, Trash2, Power, AlertTriangle, ExternalLink, CheckCircle2 } from 'lucide-react';
+import { MessageSquare, Plus, Trash2, Power, CheckCircle2 } from 'lucide-react';
 import { Badge } from '../components/Badge';
+import { getToken } from './Login';
 
 interface Rule {
   id: string;
@@ -13,31 +14,37 @@ interface Rule {
   active: number;
 }
 
-const API_URL = 'http://127.0.0.1:8787';
+const API = import.meta.env.VITE_API_URL ?? '/api';
+
+function authFetch(url: string, options: RequestInit = {}) {
+  const token = getToken();
+  return fetch(url, {
+    ...options,
+    headers: { ...(options.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  });
+}
 
 export function Automations() {
-  const { data: rulesData, isLoading: loading } = useSWR(`${API_URL}/automation-rules`);
+  const { data: rulesData, isLoading: loading } = useSWR(`${API}/automation-rules`);
   const rules: Rule[] = rulesData || [];
 
   const [isFormOpen, setIsFormOpen] = useState(false);
-  
   const [keyword, setKeyword] = useState('');
   const [message, setMessage] = useState('');
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!keyword.trim() || !message.trim()) return;
-
     try {
-      await fetch(`${API_URL}/automation-rules`, {
+      await authFetch(`${API}/automation-rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trigger_keyword: keyword, response_message: message, active: 1 })
+        body: JSON.stringify({ trigger_keyword: keyword, response_message: message, active: 1 }),
       });
       setKeyword('');
       setMessage('');
       setIsFormOpen(false);
-      await mutate(`${API_URL}/automation-rules`);
+      await mutate(`${API}/automation-rules`);
     } catch (e) {
       console.error('Erro ao salvar regra', e);
     }
@@ -45,12 +52,12 @@ export function Automations() {
 
   const toggleRule = async (rule: Rule) => {
     try {
-      await fetch(`${API_URL}/automation-rules`, {
+      await authFetch(`${API}/automation-rules`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...rule, active: rule.active ? 0 : 1 })
+        body: JSON.stringify({ ...rule, active: rule.active ? 0 : 1 }),
       });
-      await mutate(`${API_URL}/automation-rules`);
+      await mutate(`${API}/automation-rules`);
     } catch (e) {
       console.error('Erro ao alternar regra', e);
     }
@@ -59,8 +66,8 @@ export function Automations() {
   const handleDelete = async (id: string) => {
     if (confirm('Deseja excluir esta automação?')) {
       try {
-        await fetch(`${API_URL}/automation-rules/${id}`, { method: 'DELETE' });
-        await mutate(`${API_URL}/automation-rules`);
+        await authFetch(`${API}/automation-rules/${id}`, { method: 'DELETE' });
+        await mutate(`${API}/automation-rules`);
       } catch (e) {
         console.error('Erro ao excluir', e);
       }
@@ -78,26 +85,6 @@ export function Automations() {
           Nova Automação
         </Button>
       </div>
-
-      <Card className="glass-panel border-l-4 border-amber-500 bg-amber-500/10">
-        <CardContent className="flex items-start gap-4 p-4">
-          <AlertTriangle className="text-amber-500 shrink-0 mt-1" size={20} />
-          <div className="text-sm">
-            <p className="font-bold mb-1">Atenção: Configuração Necessária</p>
-            <p className="mb-2">Para as automações funcionarem, você precisa configurar o Webhook no Painel da Meta Developers:</p>
-            <ul className="list-disc ml-4 space-y-1 text-muted">
-              <li><strong>Callback URL:</strong> <code>https://SEU-WORKER.workers.dev/webhook</code></li>
-              <li><strong>Verify Token:</strong> <code>partnerhub_secret_2026</code></li>
-              <li><strong>Campos:</strong> Inscreva-se no campo <code>comments</code> em Instagram.</li>
-            </ul>
-            <div className="mt-3 flex gap-4">
-              <a href="https://developers.facebook.com/apps/" target="_blank" rel="noreferrer" className="flex items-center gap-1 text-[var(--accent-primary)] hover:underline font-medium">
-                Abrir Meta Developers <ExternalLink size={14} />
-              </a>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
 
       {isFormOpen && (
         <Card className="glass-panel border border-[var(--accent-primary)] animate-in fade-in slide-in-from-top-2">
