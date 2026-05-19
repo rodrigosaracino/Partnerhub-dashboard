@@ -87,6 +87,8 @@ for (const m of [
     UNIQUE(sender_id, flow_id)
   )`,
   'ALTER TABLE flows ADD COLUMN cooldown_hours INTEGER DEFAULT 24',
+  'ALTER TABLE subscribers ADD COLUMN name TEXT',
+  'ALTER TABLE subscribers ADD COLUMN profile_pic TEXT',
 ]) {
   try { db.exec(m); } catch {}
 }
@@ -808,13 +810,37 @@ router.get('/webhook-log', (req, res) => {
 router.get('/subscribers', (req, res) => {
   try {
     const rows = db.prepare(`
-      SELECT s.*, f.name as flow_name, f.trigger_keyword
+      SELECT s.id, s.sender_id, s.flow_id, s.opted_in_at, s.status, s.name, s.profile_pic,
+             f.name as flow_name, f.trigger_keyword
       FROM subscribers s
       LEFT JOIN flows f ON f.id = s.flow_id
       ORDER BY s.opted_in_at DESC
       LIMIT 500
     `).all();
     return ok(res, rows);
+  } catch (e) { return err(res, e.message); }
+});
+
+// Backfill de perfis para subscribers sem nome
+router.post('/subscribers/enrich', async (req, res) => {
+  try {
+    const subs = db.prepare("SELECT DISTINCT sender_id FROM subscribers WHERE name IS NULL").all();
+    if (subs.length === 0) return ok(res, { enriched: 0, total: 0 });
+    const pageToken = process.env.META_PAGE_TOKEN || process.env.META_ACCESS_TOKEN;
+    let enriched = 0;
+    for (const sub of subs) {
+      try {
+        const r = await fetch(`https://graph.facebook.com/v19.0/${sub.sender_id}?fields=name,first_name,last_name,profile_pic&access_token=${pageToken}`);
+        const p = await r.json();
+        if (!p.error && p.name) {
+          db.prepare('UPDATE subscribers SET name=?, profile_pic=? WHERE sender_id=?')
+            .run(p.name, p.profile_pic || null, sub.sender_id);
+          enriched++;
+        }
+        await sleep(100);
+      } catch { /* pula */ }
+    }
+    return ok(res, { enriched, total: subs.length });
   } catch (e) { return err(res, e.message); }
 });
 
@@ -1657,8 +1683,21 @@ function recordCooldown(senderId, flowId) {
   db.prepare('INSERT OR REPLACE INTO flow_cooldown (sender_id, flow_id, triggered_at) VALUES (?,?,CURRENT_TIMESTAMP)').run(senderId, flowId);
 }
 
-function saveSubscriber(senderId, flowId) {
+async function saveSubscriber(senderId, flowId) {
   db.prepare('INSERT OR IGNORE INTO subscribers (sender_id, flow_id) VALUES (?,?)').run(senderId, flowId);
+  // Busca perfil se ainda não tiver nome
+  const row = db.prepare('SELECT name FROM subscribers WHERE sender_id=? AND flow_id=?').get(senderId, flowId);
+  if (!row?.name) {
+    try {
+      const pageToken = process.env.META_PAGE_TOKEN || process.env.META_ACCESS_TOKEN;
+      const r = await fetch(`https://graph.facebook.com/v19.0/${senderId}?fields=name,first_name,last_name,profile_pic&access_token=${pageToken}`);
+      const p = await r.json();
+      if (!p.error && p.name) {
+        db.prepare('UPDATE subscribers SET name=?, profile_pic=? WHERE sender_id=? AND flow_id=?')
+          .run(p.name, p.profile_pic || null, senderId, flowId);
+      }
+    } catch (e) { console.warn('[Subscriber] Erro ao buscar perfil:', e.message); }
+  }
 }
 
 async function sendDM(senderId, msgPayload) {

@@ -62,6 +62,8 @@ interface Subscriber {
   trigger_keyword: string;
   opted_in_at: string;
   status: string;
+  name?: string;
+  profile_pic?: string;
 }
 
 interface SubscriberCount {
@@ -246,6 +248,33 @@ export function Automations() {
   );
 }
 
+// ── Subscriber preview bar (usado no Broadcast Modal) ─────────
+
+function SubscriberPreviewBar({ flowId, total, flowName }: { flowId: string; total: number; flowName: string }) {
+  const { data } = useSWR(`${API}/subscribers`);
+  const all: Subscriber[] = data || [];
+  const flowSubs = all.filter(s => s.flow_id === flowId).slice(0, 5);
+
+  return (
+    <div className="rounded-xl bg-white/5 border border-white/10 p-3 flex items-center gap-3">
+      <div className="flex -space-x-2">
+        {flowSubs.length > 0
+          ? flowSubs.map(s => <Avatar key={s.id} name={s.name} src={s.profile_pic} size={28} />)
+          : <div className="w-7 h-7 rounded-full bg-white/10 flex items-center justify-center"><Users size={13} className="text-muted" /></div>}
+        {total > 5 && (
+          <div className="w-7 h-7 rounded-full bg-white/20 border border-white/10 flex items-center justify-center text-[10px] font-bold text-muted">
+            +{total - 5}
+          </div>
+        )}
+      </div>
+      <div>
+        <p className="text-sm font-semibold">{total} subscriber{total !== 1 ? 's' : ''}</p>
+        <p className="text-xs text-muted">Flow: {flowName}</p>
+      </div>
+    </div>
+  );
+}
+
 // ── Broadcast Modal ────────────────────────────────────────────
 
 function BroadcastModal({ flow, subscriberCount, onClose }: {
@@ -290,13 +319,7 @@ function BroadcastModal({ flow, subscriberCount, onClose }: {
           </button>
         </div>
 
-        <div className="rounded-xl bg-white/5 border border-white/10 p-3 flex items-center gap-3">
-          <Users size={16} className="text-emerald-400 shrink-0" />
-          <div>
-            <p className="text-sm font-semibold">{subscriberCount} subscriber{subscriberCount !== 1 ? 's' : ''}</p>
-            <p className="text-xs text-muted">Flow: {flow.name || flow.trigger_keyword}</p>
-          </div>
-        </div>
+        <SubscriberPreviewBar flowId={flow.id} total={subscriberCount} flowName={flow.name || flow.trigger_keyword} />
 
         {result ? (
           <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-4 text-center">
@@ -412,15 +435,83 @@ function LogsTab() {
   );
 }
 
+// ── Avatar component ───────────────────────────────────────────
+
+function Avatar({ name, src, size = 32 }: { name?: string; src?: string; size?: number }) {
+  const initials = name
+    ? name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
+    : '?';
+  const colors = ['bg-pink-500', 'bg-purple-500', 'bg-blue-500', 'bg-emerald-500', 'bg-orange-500', 'bg-yellow-500'];
+  const color = colors[(initials.charCodeAt(0) || 0) % colors.length];
+
+  if (src) {
+    return (
+      <img
+        src={src}
+        alt={name || ''}
+        style={{ width: size, height: size }}
+        className="rounded-full object-cover shrink-0 ring-1 ring-white/10"
+        onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+      />
+    );
+  }
+  return (
+    <div
+      style={{ width: size, height: size, fontSize: size * 0.38 }}
+      className={`rounded-full shrink-0 flex items-center justify-center font-bold text-white ${color}`}
+    >
+      {initials}
+    </div>
+  );
+}
+
 // ── Aba de Subscribers ─────────────────────────────────────────
 
 function SubscribersTab() {
-  const { data, isLoading } = useSWR(`${API}/subscribers`);
+  const { data, isLoading, mutate: refetch } = useSWR(`${API}/subscribers`);
   const subscribers: Subscriber[] = data || [];
+  const [enriching, setEnriching] = useState(false);
+  const [enrichResult, setEnrichResult] = useState<{ enriched: number; total: number } | null>(null);
+
+  const withoutName = subscribers.filter(s => !s.name).length;
+
+  const handleEnrich = async () => {
+    setEnriching(true);
+    setEnrichResult(null);
+    try {
+      const r = await authFetch(`${API}/subscribers/enrich`, { method: 'POST' });
+      const d = await r.json();
+      setEnrichResult(d);
+      await refetch();
+    } finally {
+      setEnriching(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-sm text-muted">Pessoas que clicaram no botão de opt-in e aceitaram receber mensagens.</p>
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted">
+          Pessoas que clicaram no botão de opt-in.
+          {subscribers.length > 0 && <span className="ml-1 text-white font-medium">{subscribers.length} total</span>}
+        </p>
+        <div className="flex items-center gap-3">
+          {enrichResult && (
+            <span className="text-xs text-emerald-400">{enrichResult.enriched} perfis atualizados</span>
+          )}
+          {withoutName > 0 && (
+            <button
+              onClick={handleEnrich}
+              disabled={enriching}
+              className="flex items-center gap-1.5 text-xs border border-white/15 hover:border-white/30 text-muted hover:text-white rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50"
+            >
+              {enriching ? <Loader2 size={12} className="animate-spin" /> : <Users size={12} />}
+              {enriching ? 'Buscando...' : `Buscar nomes (${withoutName})`}
+            </button>
+          )}
+        </div>
+      </div>
+
       {isLoading ? (
         <p className="text-muted text-center py-16">Carregando...</p>
       ) : subscribers.length === 0 ? (
@@ -430,7 +521,7 @@ function SubscribersTab() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/10 text-xs text-muted uppercase">
-                <th className="text-left px-4 py-3">ID Instagram</th>
+                <th className="text-left px-4 py-3">Pessoa</th>
                 <th className="text-left px-4 py-3">Flow</th>
                 <th className="text-left px-4 py-3">Opt-in em</th>
                 <th className="text-center px-4 py-3">Status</th>
@@ -439,16 +530,28 @@ function SubscribersTab() {
             <tbody>
               {subscribers.map(sub => (
                 <tr key={sub.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                  <td className="px-4 py-2.5 font-mono text-xs">{sub.sender_id}</td>
                   <td className="px-4 py-2.5">
-                    <div className="flex items-center gap-1.5">
-                      <Zap size={11} className="text-yellow-400" />
-                      <span className="text-xs">{sub.flow_name || sub.flow_id}</span>
+                    <div className="flex items-center gap-3">
+                      <Avatar name={sub.name} src={sub.profile_pic} size={34} />
+                      <div className="min-w-0">
+                        {sub.name
+                          ? <p className="text-sm font-medium truncate">{sub.name}</p>
+                          : <p className="text-xs text-muted italic">Nome não carregado</p>}
+                        <p className="text-[11px] text-muted font-mono truncate">{sub.sender_id}</p>
+                      </div>
                     </div>
                   </td>
-                  <td className="px-4 py-2.5 text-xs text-muted">{formatDate(sub.opted_in_at)}</td>
+                  <td className="px-4 py-2.5">
+                    <div className="flex items-center gap-1.5">
+                      <Zap size={11} className="text-yellow-400 shrink-0" />
+                      <span className="text-xs truncate max-w-[120px]">{sub.flow_name || sub.flow_id}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-muted whitespace-nowrap">{formatDate(sub.opted_in_at)}</td>
                   <td className="px-4 py-2.5 text-center">
-                    <Badge variant={sub.status === 'active' ? 'success' : 'neutral'}>{sub.status === 'active' ? 'Ativo' : 'Cancelado'}</Badge>
+                    <Badge variant={sub.status === 'active' ? 'success' : 'neutral'}>
+                      {sub.status === 'active' ? 'Ativo' : 'Cancelado'}
+                    </Badge>
                   </td>
                 </tr>
               ))}
