@@ -1532,18 +1532,22 @@ async function processWebhookEvent(body) {
 
       if (rule) {
         try {
-          const r = await fetch(`https://graph.facebook.com/v19.0/${commentId}/replies`, {
+          const r = await fetch(`https://graph.facebook.com/v19.0/${myIgId}/messages`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: rule.response_message, access_token: token }),
+            body: JSON.stringify({
+              recipient: { id: senderId },
+              message: { text: rule.response_message },
+              access_token: token,
+            }),
           });
           const data = await r.json();
           if (data.error) throw new Error(data.error.message);
           replied = 1;
-          console.log(`[Webhook] Comentário respondido: ${commentId} | regra: "${rule.trigger_keyword}"`);
+          console.log(`[Webhook] DM enviada para ${senderId} | regra: "${rule.trigger_keyword}"`);
         } catch (e) {
           logError = e.message;
-          console.error('[Webhook] Erro ao responder comentário:', e.message);
+          console.error('[Webhook] Erro ao enviar DM:', e.message);
         }
       }
 
