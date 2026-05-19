@@ -45,6 +45,23 @@ for (const m of [
   'ALTER TABLE automation_rules ADD COLUMN comment_reply TEXT',
   'ALTER TABLE automation_rules ADD COLUMN dm_button_text TEXT',
   'ALTER TABLE automation_rules ADD COLUMN dm_button_url TEXT',
+  `CREATE TABLE IF NOT EXISTS flows (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    trigger_keyword TEXT NOT NULL,
+    active INTEGER DEFAULT 1,
+    steps TEXT NOT NULL DEFAULT '[]',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS flow_pending (
+    sender_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    flow_id TEXT NOT NULL,
+    next_step_index INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (sender_id, payload)
+  )`,
   `CREATE TABLE IF NOT EXISTS webhook_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_type TEXT,
@@ -723,6 +740,42 @@ router.post('/automation-rules', (req, res) => {
 router.delete('/automation-rules/:id', (req, res) => {
   try {
     db.prepare('DELETE FROM automation_rules WHERE id = ?').run(req.params.id);
+    return ok(res, { success: true });
+  } catch (e) { return err(res, e.message); }
+});
+
+// ── Flows CRUD ────────────────────────────────────────────────
+router.get('/flows', (req, res) => {
+  try {
+    const rows = db.prepare('SELECT * FROM flows ORDER BY created_at DESC').all();
+    return ok(res, rows.map(r => ({ ...r, steps: JSON.parse(r.steps || '[]') })));
+  } catch (e) { return err(res, e.message); }
+});
+
+router.post('/flows', (req, res) => {
+  try {
+    const { id, name, trigger_keyword, steps, active } = req.body;
+    const fid = id || Math.random().toString(36).slice(2, 9);
+    db.prepare(`INSERT OR REPLACE INTO flows (id, name, trigger_keyword, steps, active, updated_at)
+      VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)`)
+      .run(fid, name, trigger_keyword, JSON.stringify(steps || []), active ?? 1);
+    return ok(res, { id: fid });
+  } catch (e) { return err(res, e.message); }
+});
+
+router.patch('/flows/:id/toggle', (req, res) => {
+  try {
+    const flow = db.prepare('SELECT active FROM flows WHERE id=?').get(req.params.id);
+    if (!flow) return err(res, 'Flow não encontrado', 404);
+    db.prepare('UPDATE flows SET active=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+      .run(flow.active ? 0 : 1, req.params.id);
+    return ok(res, { success: true });
+  } catch (e) { return err(res, e.message); }
+});
+
+router.delete('/flows/:id', (req, res) => {
+  try {
+    db.prepare('DELETE FROM flows WHERE id=?').run(req.params.id);
     return ok(res, { success: true });
   } catch (e) { return err(res, e.message); }
 });
@@ -1507,10 +1560,76 @@ app.post('/api/webhook/instagram', (req, res) => {
   processWebhookEvent(req.body).catch(e => console.error('[Webhook] Erro ao processar evento:', e.message));
 });
 
-function matchRule(text) {
-  const rules = db.prepare('SELECT * FROM automation_rules WHERE active = 1').all();
+function matchFlow(text) {
+  const flows = db.prepare("SELECT * FROM flows WHERE active = 1").all();
   const lower = text.toLowerCase();
-  return rules.find(r => lower.includes(r.trigger_keyword.toLowerCase())) || null;
+  const flow  = flows.find(f => lower.includes(f.trigger_keyword.toLowerCase()));
+  if (!flow) return null;
+  return { ...flow, steps: JSON.parse(flow.steps || '[]') };
+}
+
+async function sendStep(step, senderId, flowId, stepIndex) {
+  const pageToken = process.env.META_PAGE_TOKEN || process.env.META_ACCESS_TOKEN;
+  const pageId    = process.env.META_PAGE_ID;
+  const endpoint  = `https://graph.facebook.com/v19.0/${pageId}/messages`;
+
+  const qrButtons = (step.buttons || []).filter(b => b.type === 'quick_reply');
+  const urlButtons = (step.buttons || []).filter(b => b.type === 'url');
+
+  let messagePayload;
+
+  if (qrButtons.length > 0) {
+    // Salva pending para processar quando o usuário clicar
+    for (const btn of qrButtons) {
+      const payload = btn.payload || `QR_${flowId}_${stepIndex}_${btn.id}`;
+      btn.payload = payload;
+      db.prepare(`INSERT OR REPLACE INTO flow_pending (sender_id, payload, flow_id, next_step_index)
+        VALUES (?,?,?,?)`)
+        .run(senderId, payload, flowId, stepIndex + 1);
+    }
+    messagePayload = {
+      text: step.text,
+      quick_replies: qrButtons.map(b => ({
+        content_type: 'text',
+        title: b.title.slice(0, 20),
+        payload: b.payload,
+      })),
+    };
+  } else if (urlButtons.length > 0) {
+    messagePayload = {
+      attachment: {
+        type: 'template',
+        payload: {
+          template_type: 'button',
+          text: step.text,
+          buttons: urlButtons.slice(0, 3).map(b => ({
+            type: 'web_url', url: b.url, title: b.title.slice(0, 20),
+          })),
+        },
+      },
+    };
+  } else {
+    messagePayload = { text: step.text };
+  }
+
+  const r = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recipient: { id: senderId }, message: messagePayload, access_token: pageToken }),
+  });
+  const d = await r.json();
+
+  // Fallback para texto simples se template falhar
+  if (d.error && urlButtons.length > 0) {
+    const fallback = step.text + '\n\n' + urlButtons.map(b => `${b.title}: ${b.url}`).join('\n');
+    await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipient: { id: senderId }, message: { text: fallback }, access_token: pageToken }),
+    });
+  } else if (d.error) {
+    throw new Error(d.error.message);
+  }
 }
 
 async function processWebhookEvent(body) {
@@ -1520,123 +1639,97 @@ async function processWebhookEvent(body) {
   const myIgId    = process.env.META_IG_ACCOUNT_ID;
 
   for (const entry of (body?.entry || [])) {
-    // ── Comentários (Instagram: field=comments / Facebook Page: field=feed) ──
+    // ── Comentários ──────────────────────────────────────────
     for (const change of (entry.changes || [])) {
       const isIgComment   = change.field === 'comments';
       const isFeedComment = change.field === 'feed' && change.value?.item === 'comment' && change.value?.verb === 'add';
       if (!isIgComment && !isFeedComment) continue;
 
       const val         = change.value || {};
-      // Instagram usa val.id e val.text; feed usa val.comment_id e val.message
       const commentId   = val.id || val.comment_id;
       const commentText = val.text || val.message || '';
       const senderId    = val.from?.id;
 
       if (!commentText || !commentId || senderId === myIgId) continue;
 
-      const rule = matchRule(commentText);
+      const flow = matchFlow(commentText);
       let replied = 0, logError = null;
 
-      if (rule) {
+      if (flow) {
         try {
-          // 1. Reply público no comentário (se configurado)
-          if (rule.comment_reply) {
-            const rc = await fetch(`https://graph.facebook.com/v19.0/${commentId}/replies`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ message: rule.comment_reply, access_token: token }),
-            });
-            const dc = await rc.json();
-            if (dc.error) console.error('[Webhook] Erro no reply do comentário:', dc.error.message);
-            else console.log(`[Webhook] Reply no comentário enviado: ${commentId}`);
-          }
-
-          // 2. DM privada via Page endpoint
-          const dmEndpoint = `https://graph.facebook.com/v19.0/${pageId}/messages`;
-          const dmToken    = pageToken;
-
-          let messagePayload;
-          if (rule.dm_button_text && rule.dm_button_url) {
-            messagePayload = {
-              attachment: {
-                type: 'template',
-                payload: {
-                  template_type: 'button',
-                  text: rule.response_message,
-                  buttons: [{ type: 'web_url', url: rule.dm_button_url, title: rule.dm_button_text }],
-                },
-              },
-            };
-          } else {
-            messagePayload = { text: rule.response_message };
-          }
-
-          const rd = await fetch(dmEndpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ recipient: { id: senderId }, message: messagePayload, access_token: dmToken }),
-          });
-          const dd = await rd.json();
-          if (dd.error) {
-            // fallback: texto simples com URL se template falhar
-            if (rule.dm_button_text && rule.dm_button_url) {
-              const fallbackText = `${rule.response_message}\n\n${rule.dm_button_url}`;
-              const rf = await fetch(dmEndpoint, {
+          for (let i = 0; i < flow.steps.length; i++) {
+            const step = flow.steps[i];
+            if (step.type === 'comment_reply') {
+              const rc = await fetch(`https://graph.facebook.com/v19.0/${commentId}/replies`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ recipient: { id: senderId }, message: { text: fallbackText }, access_token: dmToken }),
+                body: JSON.stringify({ message: step.text, access_token: token }),
               });
-              const df = await rf.json();
-              if (df.error) throw new Error(df.error.message);
-            } else {
-              throw new Error(dd.error.message);
+              const dc = await rc.json();
+              if (dc.error) console.error('[Webhook] Erro reply comentário:', dc.error.message);
+            } else if (step.type === 'dm') {
+              await sendStep(step, senderId, flow.id, i);
             }
           }
           replied = 1;
-          console.log(`[Webhook] DM enviada para ${senderId} | regra: "${rule.trigger_keyword}"`);
+          console.log(`[Webhook] Flow "${flow.name}" executado para ${senderId}`);
         } catch (e) {
           logError = e.message;
-          console.error('[Webhook] Erro ao enviar DM:', e.message);
+          console.error('[Webhook] Erro ao executar flow:', e.message);
         }
       }
 
       db.prepare('INSERT INTO webhook_log (event_type, sender_id, content, rule_matched, replied, error) VALUES (?,?,?,?,?,?)')
-        .run('comment', senderId || null, commentText, rule?.trigger_keyword || null, replied, logError);
+        .run('comment', senderId || null, commentText, flow?.trigger_keyword || null, replied, logError);
     }
 
-    // ── Direct Messages ──────────────────────────────────────
+    // ── DMs / Quick Reply postbacks ───────────────────────────
     for (const msg of (entry.messaging || [])) {
-      const senderId = msg.sender?.id;
-      const text     = msg.message?.text || '';
+      const senderId  = msg.sender?.id;
+      const text      = msg.message?.text || '';
+      const qrPayload = msg.message?.quick_reply?.payload || msg.postback?.payload || '';
 
-      if (!text || !senderId || senderId === myIgId) continue;
+      if (!senderId || senderId === myIgId) continue;
 
-      const rule = matchRule(text);
-      let replied = 0, logError = null;
-
-      if (rule) {
-        try {
-          const r = await fetch(`https://graph.facebook.com/v19.0/${myIgId}/messages`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              recipient: { id: senderId },
-              message: { text: rule.response_message },
-              access_token: token,
-            }),
-          });
-          const data = await r.json();
-          if (data.error) throw new Error(data.error.message);
-          replied = 1;
-          console.log(`[Webhook] DM respondido: ${senderId} | regra: "${rule.trigger_keyword}"`);
-        } catch (e) {
-          logError = e.message;
-          console.error('[Webhook] Erro ao responder DM:', e.message);
+      // Quick reply de opt-in → executa próximo passo do flow
+      if (qrPayload) {
+        const pending = db.prepare('SELECT * FROM flow_pending WHERE sender_id=? AND payload=?').get(senderId, qrPayload);
+        if (pending) {
+          const flowRow = db.prepare('SELECT * FROM flows WHERE id=?').get(pending.flow_id);
+          if (flowRow) {
+            const flow = { ...flowRow, steps: JSON.parse(flowRow.steps || '[]') };
+            try {
+              for (let i = pending.next_step_index; i < flow.steps.length; i++) {
+                const step = flow.steps[i];
+                if (step.type === 'dm') await sendStep(step, senderId, flow.id, i);
+              }
+              db.prepare('DELETE FROM flow_pending WHERE sender_id=? AND payload=?').run(senderId, qrPayload);
+              console.log(`[Webhook] Continuação de flow para ${senderId} após opt-in`);
+            } catch (e) {
+              console.error('[Webhook] Erro ao continuar flow:', e.message);
+            }
+          }
+          continue;
         }
       }
 
+      // DM com texto normal → tenta disparar flow
+      if (!text) continue;
+      const flow = matchFlow(text);
+      let replied = 0, logError = null;
+      if (flow) {
+        try {
+          for (let i = 0; i < flow.steps.length; i++) {
+            const step = flow.steps[i];
+            if (step.type === 'dm') await sendStep(step, senderId, flow.id, i);
+          }
+          replied = 1;
+        } catch (e) {
+          logError = e.message;
+        }
+      }
       db.prepare('INSERT INTO webhook_log (event_type, sender_id, content, rule_matched, replied, error) VALUES (?,?,?,?,?,?)')
-        .run('dm', senderId, text, rule?.trigger_keyword || null, replied, logError);
+        .run('dm', senderId, text, flow?.trigger_keyword || null, replied, logError);
     }
   }
 }
